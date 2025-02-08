@@ -1,0 +1,575 @@
+from datasets import load_dataset
+from loguru import logger
+from transformers import (PreTrainedTokenizer, 
+                          AutoTokenizer, 
+                          DataCollatorForLanguageModeling,
+                          AutoModelForCausalLM, 
+                          set_seed,
+                          get_linear_schedule_with_warmup,
+                          get_scheduler)
+from typing import List, Dict, Any
+from torch.utils.data import DataLoader, RandomSampler
+from torch.optim import AdamW
+import argparse
+from accelerate import Accelerator
+from accelerate.utils.transformer_engine import convert_model
+from transformer_engine.pytorch import fp8_autocast
+from functools import partial
+import sys
+import torch
+from tqdm import tqdm
+import os
+import math
+from typing import Optional
+import bitsandbytes as bnb
+import gc
+import wandb
+import shutil
+import datetime
+
+from data.preprocess import preprocess_pretrain_dataset
+from data.data_args import DataArguments
+from constants import IGNORE_INDEX
+from configuration_model import MyConfig
+from modeling_hobo import HoboGPTModelForCausalLM
+
+logger = logger.bind(name="pretrain")
+logger.remove()
+logger.add(
+    sys.stderr,
+    format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+    level="INFO",
+    filter=lambda record: record["level"].name in ["INFO", "ERROR"]
+)
+
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Pretrain a transformers model")
+    
+    # data process
+    parser.add_argument("--input_jsonl", type=str, default="dataset/sharegpt_gpt4/sharegpt_zh_38K_format.jsonl", help="input_jsonl")
+    parser.add_argument("--dataset_name", type=str, default="sharegpt_gpt4", help="dataset_name")
+    parser.add_argument("--cutoff_len", type=int, default=1024, help="cutoff_len")
+    
+    # model
+    parser.add_argument("--model_name_or_path", type=str, default="lm_models/Qwen2.5-0.5B-Instruct", help="model_name_or_path")
+    parser.add_argument("--tokenizer_name_or_path", type=str, default="lm_models/Qwen2.5-0.5B-Instruct", help="tokenizer_name_or_path")
+    parser.add_argument("--use_fp8", type=bool, default=False, help="use_fp8")
+    parser.add_argument("--model_tag", type=str, default=None, help="model_tag")
+    parser.add_argument("--model_out_dir", type=str, default="model_ckpts", help="model_out_dir")
+    parser.add_argument("--learning_rate", type=float, default=1e-4, help="learning_rate")
+    parser.add_argument("--num_epochs", type=int, default=1, help="num_epochs")
+    parser.add_argument("--batch_size", type=int, default=6, help="batch_size per device")
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=8, help="gradient_accumulation_steps")
+    parser.add_argument("--max_grad_norm", type=float, default=1.0, help="max_grad_norm")
+    parser.add_argument("--seed", type=int, default=1024, help="transformer_random_seed")
+    parser.add_argument("--device", type=str, default="cuda", help="device")
+    parser.add_argument("--from_scratch", type=bool, default=True, help="if to train from scratch")
+    parser.add_argument("--max_save", type=int, default=3, help="max save checkpoints")
+    
+    
+    # logging
+    parser.add_argument("--wandb_project", type=str, default="pretrain", help="wandb project name")
+    parser.add_argument("--wandb_run_name", type=str, default=None, help="wandb run name")
+    parser.add_argument("--wandb_dir", type=str, default=None, help="wandb local dir, default is ./wandb/")
+    parser.add_argument("--log_steps", type=int, default=10, help="log every n steps")
+    parser.add_argument("--save_steps", type=int, default=1000, help="save every n steps")
+    parser.add_argument("--eval_steps", type=int, default=1000, help="eval every n steps")
+    
+    args = parser.parse_args()
+    return args
+
+
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+def prepare_batch_for_fp8(batch: Dict[str, torch.Tensor], tokenizer: PreTrainedTokenizer) -> Dict[str, torch.Tensor]:
+    processed_batch = {}
+    for k, v in batch.items():
+        if not isinstance(v, torch.Tensor):
+            processed_batch[k] = v
+            continue
+        
+        if v.dim() >= 2:
+            current_shape = list(v.size())
+            batch_pad = (8 - current_shape[0] % 8) % 8
+            seq_pad = (8 - current_shape[1] % 8) % 8
+            needs_padding = batch_pad > 0 or seq_pad > 0
+        else:
+            needs_padding = False
+        
+        if k == "attention_mask":
+            v = v.bool() if not v.dtype == torch.bool else v
+        elif k in ["input_ids", "labels"]:
+            v = v.long() if not v.dtype == torch.long else v
+        else:
+            v = v.float() if not v.dtype == torch.float else v
+        
+        if v.dim() >= 2 and needs_padding:
+            new_shape = current_shape.copy()
+            new_shape[0] += batch_pad
+            new_shape[1] += seq_pad
+            
+            if k == "attention_mask":
+                fill_value = False
+            elif k == "labels":
+                fill_value = IGNORE_INDEX
+            elif k == "input_ids":
+                fill_value = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
+            else:
+                fill_value = 0
+            
+            padded_tensor = torch.full(new_shape, fill_value, 
+                                    dtype=v.dtype, 
+                                    device=v.device)
+            
+            padded_tensor[:current_shape[0], :current_shape[1], ...].copy_(v)
+            v = padded_tensor
+            
+            del padded_tensor
+            torch.cuda.empty_cache()
+        
+        if v.dim() >= 2:
+            assert v.size(0) % 8 == 0, f"Batch dimension {v.size(0)} is not a multiple of 8 for tensor {k}"
+            assert v.size(1) % 8 == 0, f"Sequence dimension {v.size(1)} is not a multiple of 8 for tensor {k}"
+        
+        if not v.is_contiguous():
+            v = v.contiguous()
+        
+        processed_batch[k] = v
+        
+    return processed_batch
+
+
+class Trainer:
+    def __init__(self, args: argparse.Namespace):
+        self.device = args.device
+        self.from_scratch = args.from_scratch
+        self.model_name_or_path = args.model_name_or_path
+        self.tokenizer_name_or_path = args.tokenizer_name_or_path
+        self.input_jsonl = args.input_jsonl
+        self.dataset_name = args.dataset_name
+        self.num_epochs = args.num_epochs
+        self.batch_size = args.batch_size
+        self.learning_rate = args.learning_rate
+        self.use_fp8 = args.use_fp8
+        self.gradient_accumulation_steps = args.gradient_accumulation_steps
+        self.max_grad_norm = args.max_grad_norm
+        self.log_steps = args.log_steps
+        self.save_steps = args.save_steps
+        self.eval_steps = args.eval_steps
+        self.max_save = args.max_save
+        seed = args.seed
+        set_seed(seed)
+        
+        self.data_args = DataArguments(cutoff_len=args.cutoff_len, 
+                                     train_on_prompt=False, 
+                                     mask_history=False, 
+                                     preprocessing_num_workers=8)
+        
+        self.accelerator = Accelerator(gradient_accumulation_steps=self.gradient_accumulation_steps)
+        self.initializer()
+        
+        self.wandb_project = args.wandb_project
+        self.wandb_run_name = args.wandb_run_name or f"{args.wandb_project.split('/')[-1]}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        self.wandb_dir = args.wandb_dir or f"./wandb/{self.wandb_run_name}"
+        
+        if self.accelerator.is_main_process:
+            if not os.path.exists(self.wandb_dir):
+                os.makedirs(self.wandb_dir)
+            
+            self.run = wandb.init(
+                project=self.wandb_project,
+                name=self.wandb_run_name,
+                dir=self.wandb_dir,
+                config={
+                    "model_name": "MyGPTModel" if self.from_scratch else self.model_name_or_path,
+                    "dataset": self.dataset_name,
+                    "batch_size": self.batch_size,
+                    "learning_rate": self.learning_rate,
+                    "num_epochs": self.num_epochs,
+                    "gradient_accumulation_steps": self.gradient_accumulation_steps,
+                    "max_grad_norm": self.max_grad_norm,
+                    "use_fp8": self.use_fp8,
+                    "seed": seed,
+                    "wandb_dir": self.wandb_dir,
+                }
+            )
+            
+            logger.info(f"Wandb local dir: {self.wandb_dir}")
+
+    def initializer(self):
+        torch.cuda.empty_cache()
+        
+        if self.from_scratch:
+            config = MyConfig(
+                vocab_size=151936,
+                hidden_size=768,
+                num_attention_heads=12,
+                num_key_value_heads=4,
+                num_hidden_layers=12,
+                max_position_embeddings=1024,
+                attention_dropout=0.0,
+                flash_attn=False,
+                rope_theta=10000,
+            )
+            self.model = HoboGPTModelForCausalLM(config=config)
+        else:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_name_or_path,
+                trust_remote_code=True,
+                low_cpu_mem_usage=True
+            )
+
+        if self.accelerator.is_main_process:
+            logger.info(f"total trainable parameters: {count_parameters(self.model)/1e9:.2f}B")
+        
+        self.model.gradient_checkpointing_enable()
+        self.model.config.use_cache = False
+        
+        if self.use_fp8:
+            self.model.zero_grad(set_to_none=True)
+            with torch.no_grad():
+                convert_model(self.model)
+                torch.cuda.empty_cache()
+        
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            self.tokenizer_name_or_path,
+            trust_remote_code=True,
+            model_max_length=self.data_args.cutoff_len * 2,
+            padding_side="left"
+        )
+        
+        self.create_dataloader()
+        self.create_optimizer()
+
+        self.model, self.optimizer, self.train_dataloader, self.lr_scheduler = self.accelerator.prepare(
+            self.model, self.optimizer, self.train_dataloader, self.lr_scheduler
+        )
+
+    def create_optimizer(self):
+        no_decay = ["bias", "LayerNorm.weight"]
+        optimizer_grouped_parameters = [
+            {
+                "params": [p for n, p in self.model.named_parameters() if not any(nd in n for nd in no_decay)],
+                "weight_decay": 0.01,
+            },
+            {
+                "params": [p for n, p in self.model.named_parameters() if any(nd in n for nd in no_decay)],
+                "weight_decay": 0.0,
+            },
+        ]
+        
+        if self.use_fp8:
+            self.optimizer = bnb.optim.AdamW8bit(optimizer_grouped_parameters, lr=self.learning_rate)
+        else:
+            self.optimizer = AdamW(optimizer_grouped_parameters, lr=self.learning_rate)
+        
+        num_update_steps_per_epoch = len(self.train_dataloader) // self.gradient_accumulation_steps
+        max_train_steps = self.num_epochs * num_update_steps_per_epoch
+        self.lr_scheduler = get_linear_schedule_with_warmup(
+            optimizer=self.optimizer,
+            num_warmup_steps=0,
+            num_training_steps=max_train_steps,
+        )
+
+    def create_dataloader(self):
+        full_dataset = load_dataset("json", data_files=self.input_jsonl, split="train")
+        column_names_to_remove = list(next(iter(full_dataset)).keys())
+        
+        preprocess_func = partial(
+            preprocess_pretrain_dataset,
+            tokenizer=self.tokenizer,
+            data_args=self.data_args,
+        )
+        
+        with self.accelerator.main_process_first():
+            full_dataset = full_dataset.map(
+                preprocess_func,
+                batched=True,
+                num_proc=self.data_args.preprocessing_num_workers,
+                remove_columns=column_names_to_remove,
+                desc="Preprocessing dataset"
+            )
+            self.accelerator.wait_for_everyone()
+            
+        if self.accelerator.is_main_process:
+            logger.info(f"Preprocessed dataset length: {len(full_dataset)}")
+        
+        data_collator = DataCollatorForLanguageModeling(
+            tokenizer=self.tokenizer,
+            mlm=False
+        )
+        
+        self.train_dataloader = DataLoader(
+            full_dataset,
+            shuffle=False,
+            collate_fn=data_collator,
+            batch_size=self.batch_size,
+            pin_memory=False,
+            num_workers=8
+        )
+        
+        counter_dataloader = DataLoader(
+            full_dataset,
+            shuffle=False,
+            collate_fn=data_collator,
+            batch_size=self.batch_size,
+            pin_memory=False,
+            num_workers=self.data_args.preprocessing_num_workers
+        )
+        
+        train_token_counter = 0
+        for counter_batch in counter_dataloader:
+            train_token_counter += int(counter_batch["attention_mask"].sum())
+        train_token_counter *= self.num_epochs
+        
+        if self.accelerator.is_main_process:
+            logger.info(f"total training token: {train_token_counter} ({train_token_counter/1e9:.2f}B)")
+        
+        del counter_dataloader
+        gc.collect()
+
+    def train_step(self, batch: Dict[str, torch.Tensor]) -> float:
+        with self.accelerator.accumulate(self.model):
+            if self.use_fp8:
+                batch = prepare_batch_for_fp8(batch, self.tokenizer)
+                with fp8_autocast(enabled=True):
+                    outputs = self.model(**batch)
+                    loss = outputs[0]
+            else:
+                outputs = self.model(**batch)
+                loss = outputs[0]
+            
+            del outputs
+            
+            self.accelerator.backward(loss)
+            
+            if self.accelerator.sync_gradients:
+                self.accelerator.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+            
+            self.optimizer.step()
+            self.lr_scheduler.step()
+            self.optimizer.zero_grad(set_to_none=True)
+            
+            return loss.detach().float().cpu()
+
+    def train(self):
+        total_steps = 0
+        best_loss = float('inf')
+        
+        for epoch in range(self.num_epochs):
+            total_loss = 0
+            progress_bar = tqdm(self.train_dataloader, desc=f"Epoch {epoch+1}/{self.num_epochs}", 
+                              disable=not self.accelerator.is_local_main_process)
+            
+            self.model.train()
+            for step, batch in enumerate(progress_bar):
+                loss = self.train_step(batch)
+                total_loss += loss
+                total_steps += 1
+                
+                current_loss = total_loss / (step + 1)
+                current_ppl = torch.exp(current_loss)
+                current_lr = self.optimizer.param_groups[0]['lr']
+                
+                progress_bar.set_postfix({
+                    'step': f"{step + 1}",
+                    'loss': f"{current_loss:.4f}",
+                    'lr': f"{current_lr:.2e}"
+                })
+                
+                if self.accelerator.is_main_process and total_steps % self.log_steps == 0:
+                    lr_scale = current_lr / self.learning_rate
+                    
+                    metrics = {
+                        "train/loss": current_loss,
+                        "train/perplexity": current_ppl,
+                        "train/learning_rate": current_lr,
+                        "train/lr_scale": lr_scale,
+                        "train/epoch": epoch + (step + 1) / len(self.train_dataloader),
+                        "train/global_step": total_steps,
+                    }
+                    
+                    if self.accelerator.sync_gradients:
+                        grad_norm = self.accelerator.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                        metrics["train/grad_norm"] = grad_norm
+                    
+                    if current_loss < best_loss and total_steps % self.save_steps == 0:
+                        best_loss = current_loss
+                        metrics["best_loss"] = best_loss
+                        self.save_manager(epoch + 1, total_steps, current_loss, max_save=self.max_save, prefix="step")
+                    
+                    wandb.log(metrics, step=total_steps)
+                    
+                if self.accelerator.is_main_process and total_steps % self.eval_steps == 0:
+                    self.evaluate(checkpoint_dir=f"checkpoints/{self.wandb_run_name}", step_num=total_steps, data_args=self.data_args, from_scratch=self.from_scratch)
+                    
+                if step % 100 == 0:
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                    
+            self.accelerator.wait_for_everyone()
+            torch.cuda.empty_cache()
+            gc.collect()
+
+            if self.accelerator.is_main_process:
+                avg_train_epoch_loss = total_loss / len(self.train_dataloader)
+                train_ppl = torch.exp(avg_train_epoch_loss)
+
+                epoch_metrics = {
+                    "train/epoch_loss": avg_train_epoch_loss,
+                    "train/epoch_perplexity": train_ppl,
+                    "train/epoch": epoch + 1,
+                }
+                
+                self.save_manager(epoch + 1, total_steps, avg_train_epoch_loss, max_save=self.max_save, prefix="epoch")
+                    
+                wandb.log(epoch_metrics, step=total_steps)
+                
+                logger.info(f"Epoch {epoch+1}/{self.num_epochs}:")
+                logger.info(f"  Average Loss: {avg_train_epoch_loss:.4f}")
+                logger.info(f"  Perplexity: {train_ppl:.2f}")
+                logger.info(f"  Learning Rate: {current_lr:.2e}")
+            
+        self.accelerator.wait_for_everyone()
+        
+        if self.accelerator.is_main_process:
+            self.save_manager(self.num_epochs, total_steps, avg_train_epoch_loss, max_save=self.max_save, prefix="final")
+            wandb.finish()
+
+    def evaluate(self, checkpoint_dir, step_num, data_args: DataArguments, from_scratch=True):
+        if not os.path.exists(checkpoint_dir):
+            logger.error(f"checkpoints dir not found: {checkpoint_dir}")
+            return
+            
+        step_dirs = [d for d in os.listdir(checkpoint_dir) 
+                    if os.path.isdir(os.path.join(checkpoint_dir, d)) and d.startswith("step_")]
+        if not step_dirs:
+            logger.error("no step checkpoints found")
+            return
+            
+        step_dirs.sort(key=lambda x: os.path.getctime(os.path.join(checkpoint_dir, x)))
+        best_model_dir = os.path.join(checkpoint_dir, step_dirs[-1])
+        logger.info(f"load best model: {best_model_dir}")
+        
+        try:
+            if from_scratch:
+                eval_model = HoboGPTModelForCausalLM.from_pretrained(
+                    best_model_dir,
+                    trust_remote_code=True,
+                    torch_dtype=torch.float32,
+                ).to("cpu")
+            else:
+                eval_model = AutoModelForCausalLM.from_pretrained(
+                    best_model_dir,
+                    trust_remote_code=True,
+                    torch_dtype=torch.float32,
+                ).to("cpu")
+            
+            eval_model.eval()
+            eval_tokenizer = AutoTokenizer.from_pretrained(
+                best_model_dir,
+                trust_remote_code=True,
+                model_max_length=data_args.cutoff_len * 2,
+                padding_side="left"
+            )
+            
+            test_prompts = [
+                "今天天气真好,",
+                "人工智能是",
+                "春天来了,",
+                "我最喜欢的季节是",
+                "学习编程的第一步是",
+                "深度学习主要研究",
+                "地球是一颗",
+                "音乐能够",
+                "读书使我",
+                "科技发展"
+            ]
+            
+            gen_config = {
+                "max_new_tokens": 1024,
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "top_k": 50,
+                "repetition_penalty": 1.1,
+                "do_sample": True,
+                "pad_token_id": eval_tokenizer.pad_token_id,
+                "eos_token_id": eval_tokenizer.eos_token_id,
+                "use_cache": True,
+                "num_beams": 1
+            }
+            
+            logger.info("\n" + "="*50 + " start evaluation " + "="*50)
+            
+            input_ids = eval_tokenizer(test_prompts, return_tensors="pt", padding=True)["input_ids"]
+            outputs = eval_model.generate(
+                input_ids,
+                **gen_config
+            )
+            responses = eval_tokenizer.batch_decode(outputs, skip_special_tokens=True)
+            
+            data = [[step_num, prompt, response] for prompt, response in zip(test_prompts, responses)]
+            
+            if not hasattr(self, 'eval_history'):
+                self.eval_history = []
+            
+            self.eval_history.extend(data)
+            
+            eval_table = wandb.Table(
+                columns=["Step", "Prompt", "Response"],
+                data=self.eval_history
+            )
+            
+            wandb.log({"eval_results": eval_table}, commit=True)
+            
+            logger.info("\n" + "="*50 + " evaluation completed " + "="*50)
+            
+        except Exception as e:
+            logger.error(e)
+        
+        finally:
+            if 'eval_model' in locals():
+                del eval_model
+            if 'eval_tokenizer' in locals():
+                del eval_tokenizer
+            gc.collect()
+
+    def save_manager(self, current_epoch, current_steps, current_loss, max_save=None, prefix=None):
+        checkpoints_dir = f"checkpoints/{self.wandb_run_name}"
+        if not os.path.exists(checkpoints_dir):
+            os.makedirs(checkpoints_dir)
+        
+        if max_save is not None:
+            step_dirs = [d for d in os.listdir(checkpoints_dir) 
+                        if os.path.isdir(os.path.join(checkpoints_dir, d)) and d.startswith(prefix)]
+            step_dirs.sort(key=lambda x: os.path.getctime(os.path.join(checkpoints_dir, x)))
+            
+            while len(step_dirs) >= max_save:
+                oldest_dir = os.path.join(checkpoints_dir, step_dirs[0])
+                shutil.rmtree(oldest_dir)
+                step_dirs.pop(0)
+        
+        save_dir = os.path.join(checkpoints_dir, 
+                                f"{prefix}_{current_steps}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}")
+        os.makedirs(save_dir, exist_ok=True)
+        
+        unwrapped_model = self.accelerator.unwrap_model(self.model)
+        unwrapped_model.save_pretrained(save_dir)
+        self.tokenizer.save_pretrained(save_dir)
+        
+        training_state = {
+            'step': current_steps,
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'loss': current_loss,
+            'epoch': current_epoch,
+        }
+        torch.save(training_state, os.path.join(save_dir, "training_state.pt"))
+
+if __name__ == "__main__":
+    args = parse_args()
+    trainer = Trainer(args)
+    trainer.train()
