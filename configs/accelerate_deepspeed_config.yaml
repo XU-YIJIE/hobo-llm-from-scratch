@@ -1,7 +1,7 @@
 compute_environment: LOCAL_MACHINE 
 deepspeed_config: 
   deepspeed_config_file: ./configs/ds_stage2_fp16.json 
-  deepspeed_hostfile: ./configs/hostfile
+  # deepspeed_hostfile: ./configs/hostfile  # 配置hostfile后可实现多节点训练
 distributed_type: DEEPSPEED
 fsdp_config: {}
 machine_rank: 0

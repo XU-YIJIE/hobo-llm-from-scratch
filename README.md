@@ -7,33 +7,43 @@
 grpo已跑通forward/backward，完整流程待开发
 
 ## 亮点
-- **从0到1实现的类Llama2架构模型**
 
-    实现了必要功能，并简化代码逻辑，提升可读性
-    - 支持 FlashAttention-2 加速
-    - 实现 Grouped Query Attention (GQA)
-    - 集成 DeepSpeed 分布式训练
-    - 支持 8-bit 量化训练
-    - 混合精度训练 (AMP)
+### 1. 从0到1实现的类Llama2架构模型
 
-    详见modeling_hobo.py
+实现了必要功能，并简化代码逻辑，提升可读性
+- 支持 FlashAttention-2 加速
+- 实现 Grouped Query Attention (GQA)
+- 集成 DeepSpeed 分布式训练
+- 支持 8-bit 量化训练
+- 混合精度训练 (AMP)
 
-    模型结构参数:
-    ```python
-    lm_config = MyConfig(
-        vocab_size=151936,
-        hidden_size=768,
-        num_attention_heads=12,
-        num_key_value_heads=4,
-        num_hidden_layers=12,
-        max_position_embeddings=1024,
-        attention_dropout=0.0,
-        flash_attn=False,
-        rope_theta=10000,
-    )
-    # model_size == 0.45b
-    ```
-    采用qwen2.5的tokenizer和vocab.json
+详见modeling_hobo.py
+
+模型结构参数:
+```python
+lm_config = MyConfig(
+    vocab_size=151936,
+    hidden_size=768,
+    num_attention_heads=12,
+    num_key_value_heads=4,
+    num_hidden_layers=12,
+    max_position_embeddings=1024,
+    attention_dropout=0.0,
+    flash_attn=False,
+    rope_theta=10000,
+)
+# model_size == 0.45b
+```
+采用qwen2.5的tokenizer和vocab.json
+
+### 2. 基于deepspeed支持多机多卡训练
+    
+accelerate config中添加配置
+    deepspeed_hostfile: ./configs/hostfile
+
+并在hostfile中配置局域网ip节点即可实现基于deepspeed的多机多卡训练
+
+基于deepspeed.pipe.PipelineModule 实现2d并行 (dp + pp)，待开发。。
 
 ## 项目结构
 
