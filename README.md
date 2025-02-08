@@ -69,10 +69,10 @@ reward_funcs.py
 ```
 
 ## 支持的数据集
-| 数据集名称     | 介绍               |训练流程
-| ---------------- | -------------------- |
-|[shibing624/sharegpt_gpt4](https://huggingface.co/datasets/shibing624/sharegpt_gpt4)| ShareGPT中挑选出的GPT4多轮问答数据，多语言问答。|sft
-|[deepctrl/deepctrl-sft-data](https://www.modelscope.cn/datasets/deepctrl/deepctrl-sft-data/summary)|匠数大模型SFT数据集是一个由匠数科技精心搜集整理的高质量数据集,包含10M条数据的中文数据集和包含2M条数据的英文数据集|sft
+| 数据集名称     | 介绍               | 训练流程               |
+| ---------------- | -------------------- | -------------------- |
+|[shibing624/sharegpt_gpt4](https://huggingface.co/datasets/shibing624/sharegpt_gpt4)| ShareGPT中挑选出的GPT4多轮问答数据，多语言问答。|sft               |
+|[deepctrl/deepctrl-sft-data](https://www.modelscope.cn/datasets/deepctrl/deepctrl-sft-data/summary)|匠数大模型SFT数据集是一个由匠数科技精心搜集整理的高质量数据集,包含10M条数据的中文数据集和包含2M条数据的英文数据集|sft               |
 
 ## 支持的模型
 | 模型名称     | 介绍               |
