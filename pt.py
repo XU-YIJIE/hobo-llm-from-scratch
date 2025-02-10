@@ -580,7 +580,7 @@ class Trainer:
 if __name__ == "__main__":
     args = parse_args()
     args.from_scratch = True
-    # args.eval_steps = 100
+    args.eval_steps = 4000
     # args.save_steps = 100
     # args.batch_size = 10
     
