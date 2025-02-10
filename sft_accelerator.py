@@ -6,14 +6,14 @@ from transformers import (PreTrainedTokenizer,
                           AutoModelForCausalLM, 
                           set_seed,
                           get_linear_schedule_with_warmup,
-                          get_scheduler)
+                          get_scheduler,
+                          BitsAndBytesConfig)
+from transformers.integrations import is_deepspeed_zero3_enabled
 from typing import List, Dict, Any
 from torch.utils.data import DataLoader, RandomSampler
 from torch.optim import AdamW
 import argparse
 from accelerate import Accelerator
-from accelerate.utils.transformer_engine import convert_model
-from transformer_engine.pytorch import fp8_autocast
 from functools import partial
 import sys
 import torch
@@ -66,7 +66,9 @@ def parse_args():
     # model
     parser.add_argument("--model_name_or_path", type=str, default="lm_models/Qwen2.5-0.5B-Instruct", help="model_name_or_path")
     parser.add_argument("--tokenizer_name_or_path", type=str, default="lm_models/Qwen2.5-0.5B-Instruct", help="tokenizer_name_or_path")
-    parser.add_argument("--use_fp8", type=bool, default=False, help="use_fp8")
+    parser.add_argument("--use_8bit", type=bool, default=False, help="use_8bit")
+    parser.add_argument("--use_4bit", type=bool, default=False, help="use_4bit")
+    parser.add_argument("--torch_dtype", type=str, default="float16", help="torch_dtype", choices=["bfloat16", "float16", "float32"])
     parser.add_argument("--model_tag", type=str, default=None, help="model_tag")
     parser.add_argument("--model_out_dir", type=str, default="model_ckpts", help="model_out_dir")
     parser.add_argument("--learning_rate", type=float, default=1e-4, help="learning_rate")
@@ -81,8 +83,9 @@ def parse_args():
     parser.add_argument("--lora_rank", type=int, default=8, help="lora rank")
     parser.add_argument("--lora_alpha", type=int, default=16, help="lora alpha")
     parser.add_argument("--lora_dropout", type=float, default=0.1, help="lora dropout")
-    parser.add_argument("--modules_to_save", type=str, default=None, help="List of modules apart from LoRA layers to be set as trainable and saved in the final checkpoint. ")
     parser.add_argument("--target_modules", type=str, default="all", help="The names of the modules to apply Lora to.")
+    parser.add_argument("--modules_to_save", type=str, default="lm_head", help="List of modules apart from LoRA layers to be set as trainable and saved in the final checkpoint. ")
+    parser.add_argument("--qlora", type=bool, default=False, help="if to use qlora")
     parser.add_argument("--max_save", type=int, default=3, help="max save checkpoints")
     
     # logging
@@ -122,66 +125,6 @@ def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
-def prepare_batch_for_fp8(batch: Dict[str, torch.Tensor], tokenizer: PreTrainedTokenizer) -> Dict[str, torch.Tensor]:
-    processed_batch = {}
-    for k, v in batch.items():
-        if not isinstance(v, torch.Tensor):
-            processed_batch[k] = v
-            continue
-        
-        # 提前检查维度，避免不必要的内存分配
-        if v.dim() >= 2:
-            current_shape = list(v.size())
-            batch_pad = (8 - current_shape[0] % 8) % 8
-            seq_pad = (8 - current_shape[1] % 8) % 8
-            needs_padding = batch_pad > 0 or seq_pad > 0
-        else:
-            needs_padding = False
-        
-        if k == "attention_mask":
-            v = v.bool() if not v.dtype == torch.bool else v
-        elif k in ["input_ids", "labels"]:
-            v = v.long() if not v.dtype == torch.long else v
-        else:
-            v = v.float() if not v.dtype == torch.float else v
-        
-        if v.dim() >= 2 and needs_padding:
-            new_shape = current_shape.copy()
-            new_shape[0] += batch_pad
-            new_shape[1] += seq_pad
-            
-            if k == "attention_mask":
-                fill_value = False
-            elif k == "labels":
-                fill_value = IGNORE_INDEX
-            elif k == "input_ids":
-                fill_value = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
-            else:
-                fill_value = 0
-            
-            padded_tensor = torch.full(new_shape, fill_value, 
-                                    dtype=v.dtype, 
-                                    device=v.device)
-            
-            # 复制原始数据（就地操作）
-            padded_tensor[:current_shape[0], :current_shape[1], ...].copy_(v)
-            v = padded_tensor
-            
-            del padded_tensor
-            torch.cuda.empty_cache()
-        
-        if v.dim() >= 2:
-            assert v.size(0) % 8 == 0, f"Batch dimension {v.size(0)} is not a multiple of 8 for tensor {k}"
-            assert v.size(1) % 8 == 0, f"Sequence dimension {v.size(1)} is not a multiple of 8 for tensor {k}"
-        
-        if not v.is_contiguous():
-            v = v.contiguous()
-        
-        processed_batch[k] = v
-        
-    return processed_batch
-
-
 class Trainer:
     def __init__(self, args: argparse.Namespace):
         # data
@@ -192,7 +135,9 @@ class Trainer:
         # model
         self.model_name_or_path = args.model_name_or_path
         self.tokenizer_name_or_path = args.tokenizer_name_or_path
-        self.use_fp8 = args.use_fp8
+        self.use_8bit = args.use_8bit
+        self.use_4bit = args.use_4bit
+        self.torch_dtype = args.torch_dtype
         self.from_scratch = args.from_scratch
         self.device = args.device
         self.num_epochs = args.num_epochs
@@ -212,6 +157,7 @@ class Trainer:
         self.lora_dropout = args.lora_dropout
         self.modules_to_save = args.modules_to_save
         self.target_modules = args.target_modules
+        self.qlora = args.qlora  # only compatible with 4bit
         
         seed = args.seed
         set_seed(seed)
@@ -234,9 +180,6 @@ class Trainer:
             if not os.path.exists(self.wandb_dir):
                 os.makedirs(self.wandb_dir)
             
-            # # 配置wandb日志
-            # wandb_log_path = os.path.join(self.wandb_dir, "wandb.log")
-            
             # 配置wandb
             # os.environ["WANDB_SILENT"] = "true"  # 静默模式
             # os.environ["WANDB_CONSOLE"] = "off"  # 关闭控制台输出
@@ -254,18 +197,41 @@ class Trainer:
                     "num_epochs": self.num_epochs,
                     "gradient_accumulation_steps": self.gradient_accumulation_steps,
                     "max_grad_norm": self.max_grad_norm,
-                    "use_fp8": self.use_fp8,
+                    "use_8bit": self.use_8bit,
                     "seed": seed,
                     "wandb_dir": self.wandb_dir,
                 }
             )
             
-            # 打印wandb本地路径信息
             logger.info(f"Wandb local dir: {self.wandb_dir}")
-            # logger.info(f"Wandb log file: {wandb_log_path}")
 
     def initializer(self):
         torch.cuda.empty_cache()  # 初始化前清理显存
+        
+        # bnb
+        load_in_4bit = self.use_4bit
+        load_in_8bit = self.use_8bit
+        if load_in_4bit and load_in_8bit:
+            raise ValueError("Error, load_in_4bit and load_in_8bit cannot be set at the same time")
+        elif load_in_8bit or load_in_4bit:
+            logger.info(f"Quantizing model, load_in_4bit: {load_in_4bit}, load_in_8bit: {load_in_8bit}")
+            if is_deepspeed_zero3_enabled():
+                raise ValueError("DeepSpeed ZeRO-3 is incompatible with quantization.")
+            if load_in_8bit:
+                quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+            elif load_in_4bit:
+                if self.qlora:
+                    quantization_config = BitsAndBytesConfig(
+                        load_in_4bit=True,
+                        bnb_4bit_use_double_quant=True,
+                        bnb_4bit_quant_type="nf4",  # qlora使用nf4配合双精度
+                        bnb_4bit_compute_dtype=self.torch_dtype,
+                    )
+                else:
+                    quantization_config = BitsAndBytesConfig(
+                        load_in_4bit=True,
+                        bnb_4bit_compute_dtype=self.torch_dtype,
+                    )
         
         if self.from_scratch:
             config = MyConfig(
@@ -279,20 +245,24 @@ class Trainer:
                 flash_attn=False,
                 rope_theta=10000,
             )
-            self.model = HoboGPTModelForCausalLM(config=config)
+            self.model = HoboGPTModelForCausalLM(config=config, 
+                                                 torch_dtype=self.torch_dtype,
+                                                 quantization_config=quantization_config)
         else:
+            # 设置torch_dtype
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_name_or_path,
                 trust_remote_code=True,
-                # torch_dtype=torch.float32,  # load FP32
-                low_cpu_mem_usage=True
+                torch_dtype=self.torch_dtype,  # 显式设置计算类型
+                low_cpu_mem_usage=True,
+                quantization_config=quantization_config
             )
         
         if self.use_peft:
             target_modules = self.target_modules.split(',') if self.target_modules else None
             if target_modules and 'all' in target_modules:
-                target_modules = find_all_linear_names(self.model, int4=self.use_fp8, int8=self.use_fp8)
-            modules_to_save = self.modules_to_save.split(',') if self.modules_to_save is not None else ["lm_head"]
+                target_modules = find_all_linear_names(self.model, int4=self.use_4bit, int8=self.use_8bit)
+            modules_to_save = self.modules_to_save.split(',') if self.modules_to_save is not None else None
             peft_config = LoraConfig(
                 task_type=TaskType.CAUSAL_LM,
                 target_modules=["q_proj", "v_proj"] if not target_modules else target_modules,
@@ -300,24 +270,26 @@ class Trainer:
                 r=self.lora_rank,
                 lora_alpha=self.lora_alpha,
                 lora_dropout=self.lora_dropout,
-                modules_to_save=modules_to_save
+                modules_to_save=modules_to_save,
+                bias="none",  # 不要训练bias
+                use_rslora=True if self.use_4bit or self.use_8bit else False,  # 量化时使用rslora
             )
             self.model = get_peft_model(self.model, peft_config)
-            for param in filter(lambda p: p.requires_grad, self.model.parameters()):
-                param.data = param.data.to(torch.float32)
+            
+            # 确保所有需要训练的参数都设置了requires_grad=True
+            for name, param in self.model.named_parameters():
+                if "lora_" in name or name.startswith("modules_to_save"):
+                    param.requires_grad = True
+                else:
+                    param.requires_grad = False
+            
             self.model.print_trainable_parameters()
 
         if self.accelerator.is_main_process:
-            logger.info(f"total trainable parameters: {count_parameters(self.model)/1e9:.2f}B")
+            logger.info(f"total trainable parameters: {count_parameters(self.model)/1e9:.5f}B")
         
         self.model.gradient_checkpointing_enable()
         self.model.config.use_cache = False
-        
-        if self.use_fp8:
-            self.model.zero_grad(set_to_none=True)
-            with torch.no_grad():
-                convert_model(self.model)
-                torch.cuda.empty_cache()  # clear cache after conversion
         
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.tokenizer_name_or_path,
@@ -347,8 +319,13 @@ class Trainer:
             },
         ]
         
-        if self.use_fp8:
-            self.optimizer = bnb.optim.AdamW8bit(optimizer_grouped_parameters, lr=self.learning_rate)
+        if self.use_8bit or self.use_4bit:
+            if self.use_4bit:
+                from torchao.prototype.low_bit_optim import AdamW4bit
+                self.optimizer = AdamW4bit(optimizer_grouped_parameters, lr=self.learning_rate)
+            else:
+                from bitsandbytes.optim import AdEMAMix
+                self.optimizer = AdEMAMix(optimizer_grouped_parameters, lr=self.learning_rate, optim_bits=8)
         else:
             self.optimizer = AdamW(optimizer_grouped_parameters, lr=self.learning_rate)
         
@@ -423,14 +400,8 @@ class Trainer:
 
     def train_step(self, batch: Dict[str, torch.Tensor]) -> float:
         with self.accelerator.accumulate(self.model):
-            if self.use_fp8:
-                batch = prepare_batch_for_fp8(batch, self.tokenizer)
-                with fp8_autocast(enabled=True):
-                    outputs = self.model(**batch)
-                    loss = outputs[0]
-            else:
-                outputs = self.model(**batch)
-                loss = outputs[0]
+            outputs = self.model(**batch)
+            loss = outputs[0]
             
             del outputs
             
@@ -442,7 +413,7 @@ class Trainer:
             
             self.optimizer.step()
             self.lr_scheduler.step()
-            self.optimizer.zero_grad(set_to_none=True)  # set_to_none=True to clean gradients more thoroughly
+            self.optimizer.zero_grad(set_to_none=True)
             
             return loss.detach().float().cpu()
     
@@ -565,6 +536,8 @@ class Trainer:
         logger.info(f"load best model: {best_model_dir}")
         
         try:
+            logger.info("\n" + "="*50 + " start evaluation " + "="*50)
+            logger.info(f"loading best model from {best_model_dir}")
             if from_scratch:
                 eval_model = HoboGPTModelForCausalLM.from_pretrained(
                     best_model_dir,
@@ -621,8 +594,6 @@ class Trainer:
                 "use_cache": True,
                 "num_beams": 1
             }
-            
-            logger.info("\n" + "="*50 + " start evaluation " + "="*50)
             
             input_strs = []
             for query in test_queries: 
@@ -702,8 +673,14 @@ class Trainer:
 
 if __name__ == "__main__":
     args = parse_args()
-    args.use_peft = True
     args.from_scratch = False
+    args.use_peft = True
+    args.target_modules = "q_proj,v_proj,lm_head"
+    args.use_4bit = True
+    # args.use_8bit = True
+    args.modules_to_save = None
+    args.qlora = True
+    args.batch_size = 10
     data_args = DataArguments(template=args.template, 
                               cutoff_len=args.cutoff_len, 
                               train_on_prompt=False, 
