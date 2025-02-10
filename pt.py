@@ -134,7 +134,7 @@ class Trainer:
         torch.cuda.empty_cache()
         
         # bnb
-        quantization_config = {}
+        quantization_config = None
         load_in_4bit = self.use_4bit
         load_in_8bit = self.use_8bit
         if load_in_4bit and load_in_8bit:
@@ -171,17 +171,20 @@ class Trainer:
                 flash_attn=False,
                 rope_theta=10000,
                 torch_dtype=self.torch_dtype,
-                quantization_config=quantization_config
             )
+            if quantization_config:
+                config.quantization_config = quantization_config
             self.model = HoboGPTModelForCausalLM(config=config)
         else:
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_name_or_path,
-                trust_remote_code=True,
-                low_cpu_mem_usage=True,
-                torch_dtype=self.torch_dtype,
-                quantization_config=quantization_config
-            )
+            kwargs = {
+                "pretrained_model_name_or_path": self.model_name_or_path,
+                "trust_remote_code": True,
+                "low_cpu_mem_usage": True,
+                "torch_dtype": self.torch_dtype,
+            }
+            if quantization_config:
+                kwargs["quantization_config"] = quantization_config
+            self.model = AutoModelForCausalLM.from_pretrained(**kwargs)
 
         if self.accelerator.is_main_process:
             logger.info(f"total trainable parameters: {count_parameters(self.model)/1e9:.5f}B")
@@ -252,10 +255,6 @@ class Trainer:
             num_training_steps=max_train_steps,
         )
 
-        if self.accelerator.is_main_process:
-            logger.info(f"total training steps: {max_train_steps}")
-            logger.info(f"warmup steps: {self.warmup_steps}")
-            logger.info(f"steps per epoch: {num_update_steps_per_epoch}")
 
     def create_dataloader(self):
         full_dataset = load_dataset(path=self.dataset_dir, data_files=self.input_jsonl, split="train")
@@ -451,6 +450,8 @@ class Trainer:
         logger.info(f"load best model: {best_model_dir}")
         
         try:
+            logger.info("\n" + "="*50 + " start evaluation " + "="*50)
+            logger.info(f"loading best model from {best_model_dir}")
             if from_scratch:
                 eval_model = HoboGPTModelForCausalLM.from_pretrained(
                     best_model_dir,
@@ -482,7 +483,17 @@ class Trainer:
                 "地球是一颗",
                 "音乐能够",
                 "读书使我",
-                "科技发展"
+                "科技发展",
+                "环境保护需要",
+                "互联网给我们带来了",
+                "运动对健康的好处是",
+                "中国传统文化的精髓在于",
+                "未来的教育应该",
+                "太空探索的意义是",
+                "大数据时代的特点是",
+                "创新思维能够",
+                "城市发展应该注重",
+                "良好的生活习惯包括"
             ]
             
             gen_config = {
@@ -497,8 +508,6 @@ class Trainer:
                 "use_cache": True,
                 "num_beams": 1
             }
-            
-            logger.info("\n" + "="*50 + " start evaluation " + "="*50)
             
             input_ids = eval_tokenizer(test_prompts, return_tensors="pt", padding=True)["input_ids"]
             outputs = eval_model.generate(
@@ -567,10 +576,12 @@ class Trainer:
 if __name__ == "__main__":
     args = parse_args()
     args.from_scratch = True
+    # args.eval_steps = 100
+    # args.save_steps = 100
     # args.batch_size = 10
     
     # args.use_4bit = True
-    args.use_8bit = True
+    # args.use_8bit = True
     # args.use_peft = True
     # args.target_modules = "q_proj,v_proj,lm_head"
     # args.modules_to_save = None

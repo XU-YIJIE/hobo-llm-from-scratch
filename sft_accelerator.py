@@ -166,7 +166,7 @@ class Trainer:
         torch.cuda.empty_cache()  # 初始化前清理显存
         
         # bnb
-        quantization_config = {}
+        quantization_config = None
         load_in_4bit = self.use_4bit
         load_in_8bit = self.use_8bit
         if load_in_4bit and load_in_8bit:
@@ -205,16 +205,19 @@ class Trainer:
                 torch_dtype=self.torch_dtype,
                 quantization_config=quantization_config
             )
+            if quantization_config:
+                config.quantization_config = quantization_config
             self.model = HoboGPTModelForCausalLM(config=config)
         else:
-            # 设置torch_dtype
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_name_or_path,
-                trust_remote_code=True,
-                torch_dtype=self.torch_dtype,  # 显式设置计算类型
-                low_cpu_mem_usage=True,
-                quantization_config=quantization_config
-            )
+            kwargs = {
+                "pretrained_model_name_or_path": self.model_name_or_path,
+                "trust_remote_code": True,
+                "torch_dtype": self.torch_dtype,
+                "low_cpu_mem_usage": True,
+            }
+            if quantization_config:
+                kwargs["quantization_config"] = quantization_config
+            self.model = AutoModelForCausalLM.from_pretrained(**kwargs)
         
         if self.use_peft:
             target_modules = self.target_modules.split(',') if self.target_modules else None
