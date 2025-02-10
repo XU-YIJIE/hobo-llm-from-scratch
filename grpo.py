@@ -1,10 +1,14 @@
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import (AutoTokenizer, 
+                          AutoModelForCausalLM,
+                          get_linear_schedule_with_warmup)
 from datasets import Dataset
 from grpo_trainer import GRPOTrainer, GRPOConfig
 from reward_funcs import compute_json_format_reward
 import os
 from loguru import logger
+from accelerate import Accelerator
+from transformers.data.data_collator import DataCollatorForLanguageModeling
 
 os.environ["NCCL_P2P_DISABLE"] = "1"
 os.environ["NCCL_IB_DISABLE"] = "1"
@@ -50,19 +54,29 @@ def prepare_sample_dataset(batch_size=4):
 
 
 def main():
+    learning_rate = 1e-5
+    group_num = 4
+    mini_batch_size = 1
+    gradient_accumulation_steps = 8
+    max_grad_norm = 1
+    seed = 1024
+    batch_size = 4
+    num_epochs = 100
+    model_name = "lm_models/Qwen2.5-0.5B-Instruct"  # 使用Qwen2.5-0.5B-Instruct作为基础模型
+    
     config = GRPOConfig(
-        learning_rate=1e-5,
-        group_num=4,  # 每个输入生成4个候选回复
-        mini_batch_size=1,
-        gradient_accumulation_steps=1,
-        max_grad_norm=1.0,
-        seed=42
+        learning_rate=learning_rate,
+        group_num=group_num,  # 每个输入生成4个候选回复
+        mini_batch_size=mini_batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        max_grad_norm=max_grad_norm,
+        seed=seed
+    )
+    accelerator = Accelerator(
+        gradient_accumulation_steps=config.gradient_accumulation_steps,
     )
     
-    dataloader = prepare_sample_dataset(batch_size=4)
-
-    model_name = "lm_models/Qwen2.5-0.5B-Instruct"  # 使用Qwen2.5-0.5B-Instruct作为基础模型
-    model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True).cpu()
+    model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True)
     model.gradient_checkpointing_enable()
     
     # 注意padding区分left/right
@@ -75,20 +89,39 @@ def main():
     for param in ref_model.parameters():
         param.requires_grad = False
     
+    data_collator = DataCollatorForLanguageModeling(tokenizer, mlm=False)
+    dataloader = prepare_sample_dataset(batch_size=batch_size)
+    num_training_steps = len(dataloader) * (batch_size // mini_batch_size) // gradient_accumulation_steps
+    
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=learning_rate
+    )
+    
+    lr_scheduler = get_linear_schedule_with_warmup(
+        optimizer=optimizer,
+        num_warmup_steps=0,
+        num_training_steps=num_training_steps,
+    )
+    
+    model, optimizer, dataloader, lr_scheduler, ref_model = accelerator.prepare(
+        model, optimizer, dataloader, lr_scheduler, ref_model)
+    
     trainer = GRPOTrainer(
         config=config,
         model=model,
         ref_model=ref_model,
         tokenizer=tokenizer,
+        optimizer=optimizer,
+        lr_scheduler=lr_scheduler,
+        accelerator=accelerator,
     )
     
-    num_epochs = 100
     for epoch in range(num_epochs):
         print(f"Epoch: {epoch + 1}/{num_epochs}")
         
         for batch_idx, batch in enumerate(dataloader):
             batch_query = batch["query"]
-            
             input_strs = []
             for query in batch_query:
                 MESSAGES = [
@@ -98,9 +131,10 @@ def main():
                 input_strs.append(input_str)
             input_ids = tokenizer(input_strs, return_tensors="pt", add_special_tokens=True, padding=True)["input_ids"]
 
-            input_ids = input_ids.to("cuda")
+            input_ids = input_ids.to(accelerator.device)
             input_len = input_ids.shape[1]
             
+            # 采样参数
             gen_config = {
                 "max_new_tokens": 512,
                 "temperature": 0.7,
@@ -112,9 +146,8 @@ def main():
                 "eos_token_id": tokenizer.eos_token_id,
                 "use_cache": True,
                 "num_beams": 1,
-                "num_return_sequences": config.group_num,
+                "num_return_sequences": group_num,
             }
-            
             gen_count = 0
             while True:
                 responses = trainer.generate(
@@ -129,16 +162,18 @@ def main():
                 
                 if len(set(scores)) > 1:
                     break
-                
                 # scores如果输出单一值则没有训练意义
                 logger.info(f"generation {gen_count} times, no valid JSON, continue")
                 gen_count += 1
-                
-            print(f"Batch {batch_idx}, avg_score: {sum(scores)/len(scores):.3f}")
+
+            if accelerator.is_main_process:
+                logger.info(f"Batch {batch_idx + 1}, avg_score: {sum(scores)/len(scores):.3f}")
 
             # 扩展input_ids，对其responses
             input_ids = torch.repeat_interleave(input_ids, repeats=config.group_num, dim=0)
-            stats = trainer.step(
+            scores = torch.tensor(scores, device=accelerator.device)
+            
+            state = trainer.step(
                 query_ids=input_ids,
                 response_ids=response_ids,
                 scores=scores
