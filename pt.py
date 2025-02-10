@@ -455,7 +455,6 @@ class Trainer:
             if from_scratch:
                 eval_model = HoboGPTModelForCausalLM.from_pretrained(
                     best_model_dir,
-                    trust_remote_code=True,
                     torch_dtype=torch.float32,
                 ).to("cpu")
             else:
