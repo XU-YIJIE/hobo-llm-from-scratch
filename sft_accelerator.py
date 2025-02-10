@@ -275,14 +275,6 @@ class Trainer:
                 use_rslora=True if self.use_4bit or self.use_8bit else False,  # 量化时使用rslora
             )
             self.model = get_peft_model(self.model, peft_config)
-            
-            # 确保所有需要训练的参数都设置了requires_grad=True
-            for name, param in self.model.named_parameters():
-                if "lora_" in name or name.startswith("modules_to_save"):
-                    param.requires_grad = True
-                else:
-                    param.requires_grad = False
-            
             self.model.print_trainable_parameters()
 
         if self.accelerator.is_main_process:

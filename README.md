@@ -9,15 +9,14 @@ grpo已跑通forward/backward，完整流程待开发
 ## 亮点
 
 ### 1. 从0到1实现的类Llama2架构模型
+模型结构详见modeling_hobo.py
 
 实现了必要功能，并简化代码逻辑，提升可读性
 - 支持 FlashAttention-2 加速
 - 实现 Grouped Query Attention (GQA)
 - 集成 DeepSpeed 分布式训练
-- 支持 8-bit 量化训练
-- 混合精度训练 (AMP)
-
-详见modeling_hobo.py
+- 支持 8bit/4bit 量化训练
+- 支持 lora/qlora
 
 模型结构参数:
 ```python
