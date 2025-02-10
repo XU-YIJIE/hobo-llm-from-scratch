@@ -27,6 +27,7 @@ import wandb
 import shutil
 import datetime
 from datasets import Dataset
+from peft import LoraConfig, TaskType, get_peft_model
 
 from data.template import Template, get_template_and_fix_tokenizer
 from data.preprocess import preprocess_supervised_dataset
@@ -76,6 +77,12 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=1024, help="transformer_random_seed")
     parser.add_argument("--device", type=str, default="cuda", help="device")
     parser.add_argument("--from_scratch", type=bool, default=True, help="if to train from scratch")
+    parser.add_argument("--use_peft", type=bool, default=False, help="if to use peft")
+    parser.add_argument("--lora_rank", type=int, default=8, help="lora rank")
+    parser.add_argument("--lora_alpha", type=int, default=16, help="lora alpha")
+    parser.add_argument("--lora_dropout", type=float, default=0.1, help="lora dropout")
+    parser.add_argument("--modules_to_save", type=str, default=None, help="List of modules apart from LoRA layers to be set as trainable and saved in the final checkpoint. ")
+    parser.add_argument("--target_modules", type=str, default="all", help="The names of the modules to apply Lora to.")
     parser.add_argument("--max_save", type=int, default=3, help="max save checkpoints")
     
     # logging
@@ -87,6 +94,28 @@ def parse_args():
     parser.add_argument("--eval_steps", type=int, default=1000, help="save every n steps")
     args = parser.parse_args()
     return args
+
+
+def find_all_linear_names(peft_model, int4=False, int8=False):
+    """Find all linear layer names in the model. reference from qlora paper."""
+    cls = torch.nn.Linear
+    if int4 or int8:
+        import bitsandbytes as bnb
+        if int4:
+            cls = bnb.nn.Linear4bit
+        elif int8:
+            cls = bnb.nn.Linear8bitLt
+    lora_module_names = set()
+    for name, module in peft_model.named_modules():
+        if isinstance(module, cls):
+            # last layer is not add to lora_module_names
+            if 'lm_head' in name:
+                continue
+            if 'output_layer' in name:
+                continue
+            names = name.split('.')
+            lora_module_names.add(names[0] if len(names) == 1 else names[-1])
+    return sorted(lora_module_names)
 
 
 def count_parameters(model):
@@ -155,23 +184,35 @@ def prepare_batch_for_fp8(batch: Dict[str, torch.Tensor], tokenizer: PreTrainedT
 
 class Trainer:
     def __init__(self, args: argparse.Namespace):
-        self.device = args.device
-        self.from_scratch = args.from_scratch
-        self.model_name_or_path = args.model_name_or_path
-        self.tokenizer_name_or_path = args.tokenizer_name_or_path
+        # data
         self.input_jsonl = args.input_jsonl
         self.dataset_name = args.dataset_name
         self.dataset_dir = args.dataset_dir
+        
+        # model
+        self.model_name_or_path = args.model_name_or_path
+        self.tokenizer_name_or_path = args.tokenizer_name_or_path
+        self.use_fp8 = args.use_fp8
+        self.from_scratch = args.from_scratch
+        self.device = args.device
         self.num_epochs = args.num_epochs
         self.batch_size = args.batch_size
         self.learning_rate = args.learning_rate
-        self.use_fp8 = args.use_fp8
         self.gradient_accumulation_steps = args.gradient_accumulation_steps
         self.max_grad_norm = args.max_grad_norm
         self.log_steps = args.log_steps
         self.save_steps = args.save_steps
         self.eval_steps = args.eval_steps
         self.max_save = args.max_save
+        
+        # peft
+        self.use_peft = args.use_peft
+        self.lora_rank = args.lora_rank
+        self.lora_alpha = args.lora_alpha
+        self.lora_dropout = args.lora_dropout
+        self.modules_to_save = args.modules_to_save
+        self.target_modules = args.target_modules
+        
         seed = args.seed
         set_seed(seed)
         
@@ -246,6 +287,25 @@ class Trainer:
                 # torch_dtype=torch.float32,  # load FP32
                 low_cpu_mem_usage=True
             )
+        
+        if self.use_peft:
+            target_modules = self.target_modules.split(',') if self.target_modules else None
+            if target_modules and 'all' in target_modules:
+                target_modules = find_all_linear_names(self.model, int4=self.use_fp8, int8=self.use_fp8)
+            modules_to_save = self.modules_to_save.split(',') if self.modules_to_save is not None else ["lm_head"]
+            peft_config = LoraConfig(
+                task_type=TaskType.CAUSAL_LM,
+                target_modules=["q_proj", "v_proj"] if not target_modules else target_modules,
+                inference_mode=False,
+                r=self.lora_rank,
+                lora_alpha=self.lora_alpha,
+                lora_dropout=self.lora_dropout,
+                modules_to_save=modules_to_save
+            )
+            self.model = get_peft_model(self.model, peft_config)
+            for param in filter(lambda p: p.requires_grad, self.model.parameters()):
+                param.data = param.data.to(torch.float32)
+            self.model.print_trainable_parameters()
 
         if self.accelerator.is_main_process:
             logger.info(f"total trainable parameters: {count_parameters(self.model)/1e9:.2f}B")
@@ -569,7 +629,6 @@ class Trainer:
                 MESSAGES = [
                     {"role": "user", "content": query}
                 ]
-                # TODO 注意
                 input_str = eval_tokenizer.apply_chat_template(MESSAGES, template=eval_tokenizer.chat_template, tokenize=False, add_generation_prompt=True)
                 input_strs.append(input_str) 
             inputs = eval_tokenizer(input_strs, return_tensors="pt", add_special_tokens=True, padding=True)
@@ -595,15 +654,7 @@ class Trainer:
             )
             
             wandb.log({"eval_results": eval_table}, commit=True)
-            
-            # # 创建wandb表格并添加数据
-            # data = [[input_str, response] for input_str, response in zip(input_strs, responses)]
-            # eval_table = wandb.Table(
-            #     columns=["InputStr", "Response"],
-            #     data=data
-            # )
-            # wandb.log({"eval_results": eval_table}, commit=True)
-            
+
             logger.info("\n" + "="*50 + " evaluation completed " + "="*50)
             
         except Exception as e:
@@ -622,7 +673,6 @@ class Trainer:
             os.makedirs(checkpoints_dir)
         
         if max_save is not None:
-            # 获取checkpoints目录下所有以step_开头的文件夹
             step_dirs = [d for d in os.listdir(checkpoints_dir) 
                         if os.path.isdir(os.path.join(checkpoints_dir, d)) and d.startswith(prefix)]
             step_dirs.sort(key=lambda x: os.path.getctime(os.path.join(checkpoints_dir, x)))
@@ -632,7 +682,6 @@ class Trainer:
                 shutil.rmtree(oldest_dir)
                 step_dirs.pop(0)
         
-        # 保存新的checkpoint
         save_dir = os.path.join(checkpoints_dir, 
                                 f"{prefix}_{current_steps}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}")
         os.makedirs(save_dir, exist_ok=True)
@@ -651,17 +700,10 @@ class Trainer:
         # self.run.save(os.path.join(save_dir, "*"), base_path=checkpoints_dir)
 
 
-def save_dataset_to_jsonl(dataset, output_file):
-    import json
-    with open(output_file, 'w', encoding='utf-8') as f:
-        for item in dataset:
-            # 将每条数据转换为JSON字符串并写入文件
-            json_str = json.dumps(item, ensure_ascii=False)
-            f.write(json_str + '\n')
-
-
 if __name__ == "__main__":
     args = parse_args()
+    args.use_peft = True
+    args.from_scratch = False
     data_args = DataArguments(template=args.template, 
                               cutoff_len=args.cutoff_len, 
                               train_on_prompt=False, 
