@@ -496,6 +496,11 @@ class Trainer:
                 "良好的生活习惯包括"
             ]
             
+            # model_max_length = eval_model.config.max_position_embeddings
+            # input_ids = eval_tokenizer(test_prompts, return_tensors="pt", padding=True)["input_ids"]
+            # max_prompt_length = input_ids.shape[1]
+            # max_new_tokens = min(512, model_max_length - max_prompt_length)  # 确保总长度不超过模型限制
+            
             gen_config = {
                 "max_new_tokens": 1024,
                 "temperature": 0.7,
@@ -582,10 +587,6 @@ if __name__ == "__main__":
     
     # args.use_4bit = True
     # args.use_8bit = True
-    # args.use_peft = True
-    # args.target_modules = "q_proj,v_proj,lm_head"
-    # args.modules_to_save = None
-    # args.qlora = True
     args.wandb_project = "pt_training"
     trainer = Trainer(args)
     trainer.train()
