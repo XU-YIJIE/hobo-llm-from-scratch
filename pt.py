@@ -6,14 +6,14 @@ from transformers import (PreTrainedTokenizer,
                           AutoModelForCausalLM, 
                           set_seed,
                           get_linear_schedule_with_warmup,
-                          get_scheduler)
+                          get_scheduler,
+                          BitsAndBytesConfig)
+from transformers.integrations import is_deepspeed_zero3_enabled
 from typing import List, Dict, Any
 from torch.utils.data import DataLoader, RandomSampler
 from torch.optim import AdamW
 import argparse
 from accelerate import Accelerator
-from accelerate.utils.transformer_engine import convert_model
-from transformer_engine.pytorch import fp8_autocast
 from functools import partial
 import sys
 import torch
@@ -28,10 +28,13 @@ import shutil
 import datetime
 
 from data.preprocess import preprocess_pretrain_dataset
+from data.aligner import align_dataset
 from data.data_args import DataArguments
+from data.parser import DatasetAttr
 from constants import IGNORE_INDEX
 from configuration_model import MyConfig
 from modeling_hobo import HoboGPTModelForCausalLM
+from arguments import parse_args
 
 logger = logger.bind(name="pretrain")
 logger.remove()
@@ -43,120 +46,44 @@ logger.add(
 )
 
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+os.environ["NCCL_P2P_DISABLE"] = "1"
+os.environ["NCCL_IB_DISABLE"] = "1"  # Using RTX 4000 series doesn't support faster communication broadband via P2P or IB
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Pretrain a transformers model")
-    
-    # data process
-    parser.add_argument("--input_jsonl", type=str, default="dataset/sharegpt_gpt4/sharegpt_zh_38K_format.jsonl", help="input_jsonl")
-    parser.add_argument("--dataset_name", type=str, default="sharegpt_gpt4", help="dataset_name")
-    parser.add_argument("--cutoff_len", type=int, default=1024, help="cutoff_len")
-    
-    # model
-    parser.add_argument("--model_name_or_path", type=str, default="lm_models/Qwen2.5-0.5B-Instruct", help="model_name_or_path")
-    parser.add_argument("--tokenizer_name_or_path", type=str, default="lm_models/Qwen2.5-0.5B-Instruct", help="tokenizer_name_or_path")
-    parser.add_argument("--use_fp8", type=bool, default=False, help="use_fp8")
-    parser.add_argument("--model_tag", type=str, default=None, help="model_tag")
-    parser.add_argument("--model_out_dir", type=str, default="model_ckpts", help="model_out_dir")
-    parser.add_argument("--learning_rate", type=float, default=1e-4, help="learning_rate")
-    parser.add_argument("--num_epochs", type=int, default=1, help="num_epochs")
-    parser.add_argument("--batch_size", type=int, default=6, help="batch_size per device")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=8, help="gradient_accumulation_steps")
-    parser.add_argument("--max_grad_norm", type=float, default=1.0, help="max_grad_norm")
-    parser.add_argument("--seed", type=int, default=1024, help="transformer_random_seed")
-    parser.add_argument("--device", type=str, default="cuda", help="device")
-    parser.add_argument("--from_scratch", type=bool, default=True, help="if to train from scratch")
-    parser.add_argument("--max_save", type=int, default=3, help="max save checkpoints")
-    
-    
-    # logging
-    parser.add_argument("--wandb_project", type=str, default="pretrain", help="wandb project name")
-    parser.add_argument("--wandb_run_name", type=str, default=None, help="wandb run name")
-    parser.add_argument("--wandb_dir", type=str, default=None, help="wandb local dir, default is ./wandb/")
-    parser.add_argument("--log_steps", type=int, default=10, help="log every n steps")
-    parser.add_argument("--save_steps", type=int, default=1000, help="save every n steps")
-    parser.add_argument("--eval_steps", type=int, default=1000, help="eval every n steps")
-    
-    args = parser.parse_args()
-    return args
+args = parse_args()
 
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
-def prepare_batch_for_fp8(batch: Dict[str, torch.Tensor], tokenizer: PreTrainedTokenizer) -> Dict[str, torch.Tensor]:
-    processed_batch = {}
-    for k, v in batch.items():
-        if not isinstance(v, torch.Tensor):
-            processed_batch[k] = v
-            continue
-        
-        if v.dim() >= 2:
-            current_shape = list(v.size())
-            batch_pad = (8 - current_shape[0] % 8) % 8
-            seq_pad = (8 - current_shape[1] % 8) % 8
-            needs_padding = batch_pad > 0 or seq_pad > 0
-        else:
-            needs_padding = False
-        
-        if k == "attention_mask":
-            v = v.bool() if not v.dtype == torch.bool else v
-        elif k in ["input_ids", "labels"]:
-            v = v.long() if not v.dtype == torch.long else v
-        else:
-            v = v.float() if not v.dtype == torch.float else v
-        
-        if v.dim() >= 2 and needs_padding:
-            new_shape = current_shape.copy()
-            new_shape[0] += batch_pad
-            new_shape[1] += seq_pad
-            
-            if k == "attention_mask":
-                fill_value = False
-            elif k == "labels":
-                fill_value = IGNORE_INDEX
-            elif k == "input_ids":
-                fill_value = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
-            else:
-                fill_value = 0
-            
-            padded_tensor = torch.full(new_shape, fill_value, 
-                                    dtype=v.dtype, 
-                                    device=v.device)
-            
-            padded_tensor[:current_shape[0], :current_shape[1], ...].copy_(v)
-            v = padded_tensor
-            
-            del padded_tensor
-            torch.cuda.empty_cache()
-        
-        if v.dim() >= 2:
-            assert v.size(0) % 8 == 0, f"Batch dimension {v.size(0)} is not a multiple of 8 for tensor {k}"
-            assert v.size(1) % 8 == 0, f"Sequence dimension {v.size(1)} is not a multiple of 8 for tensor {k}"
-        
-        if not v.is_contiguous():
-            v = v.contiguous()
-        
-        processed_batch[k] = v
-        
-    return processed_batch
-
-
 class Trainer:
     def __init__(self, args: argparse.Namespace):
-        self.device = args.device
-        self.from_scratch = args.from_scratch
-        self.model_name_or_path = args.model_name_or_path
-        self.tokenizer_name_or_path = args.tokenizer_name_or_path
+        # data
         self.input_jsonl = args.input_jsonl
         self.dataset_name = args.dataset_name
+        self.dataset_dir = args.dataset_dir
+        
+        # model
+        self.model_name_or_path = args.model_name_or_path
+        self.tokenizer_name_or_path = args.tokenizer_name_or_path
+        self.use_8bit = args.use_8bit
+        self.use_4bit = args.use_4bit
+        self.torch_dtype = args.torch_dtype
+        self.from_scratch = args.from_scratch
+        self.device = args.device
+        
         self.num_epochs = args.num_epochs
         self.batch_size = args.batch_size
         self.learning_rate = args.learning_rate
-        self.use_fp8 = args.use_fp8
         self.gradient_accumulation_steps = args.gradient_accumulation_steps
         self.max_grad_norm = args.max_grad_norm
+        
+        self.weight_decay = args.weight_decay
+        self.warmup_steps = args.warmup_steps
+        self.adam_beta1 = args.adam_beta1
+        self.adam_beta2 = args.adam_beta2
+        self.adam_epsilon = args.adam_epsilon
+        
         self.log_steps = args.log_steps
         self.save_steps = args.save_steps
         self.eval_steps = args.eval_steps
@@ -165,9 +92,8 @@ class Trainer:
         set_seed(seed)
         
         self.data_args = DataArguments(cutoff_len=args.cutoff_len, 
-                                     train_on_prompt=False, 
-                                     mask_history=False, 
-                                     preprocessing_num_workers=8)
+                                       preprocessing_num_workers=8, 
+                                       packing=True)
         
         self.accelerator = Accelerator(gradient_accumulation_steps=self.gradient_accumulation_steps)
         self.initializer()
@@ -192,7 +118,11 @@ class Trainer:
                     "num_epochs": self.num_epochs,
                     "gradient_accumulation_steps": self.gradient_accumulation_steps,
                     "max_grad_norm": self.max_grad_norm,
-                    "use_fp8": self.use_fp8,
+                    "use_8bit": self.use_8bit,
+                    "use_4bit": self.use_4bit,
+                    "torch_dtype": self.torch_dtype,
+                    "weight_decay": self.weight_decay,
+                    "warmup_steps": self.warmup_steps,
                     "seed": seed,
                     "wandb_dir": self.wandb_dir,
                 }
@@ -203,6 +133,32 @@ class Trainer:
     def initializer(self):
         torch.cuda.empty_cache()
         
+        # bnb
+        quantization_config = {}
+        load_in_4bit = self.use_4bit
+        load_in_8bit = self.use_8bit
+        if load_in_4bit and load_in_8bit:
+            raise ValueError("Error, load_in_4bit and load_in_8bit cannot be set at the same time")
+        elif load_in_8bit or load_in_4bit:
+            logger.info(f"Quantizing model, load_in_4bit: {load_in_4bit}, load_in_8bit: {load_in_8bit}")
+            if is_deepspeed_zero3_enabled():
+                raise ValueError("DeepSpeed ZeRO-3 is incompatible with quantization.")
+            if load_in_8bit:
+                quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+            elif load_in_4bit:
+                if self.qlora:
+                    quantization_config = BitsAndBytesConfig(
+                        load_in_4bit=True,
+                        bnb_4bit_use_double_quant=True,
+                        bnb_4bit_quant_type="nf4",  # qlora使用nf4配合双精度
+                        bnb_4bit_compute_dtype=self.torch_dtype,
+                    )
+                else:
+                    quantization_config = BitsAndBytesConfig(
+                        load_in_4bit=True,
+                        bnb_4bit_compute_dtype=self.torch_dtype,
+                    )
+            
         if self.from_scratch:
             config = MyConfig(
                 vocab_size=151936,
@@ -214,26 +170,24 @@ class Trainer:
                 attention_dropout=0.0,
                 flash_attn=False,
                 rope_theta=10000,
+                torch_dtype=self.torch_dtype,
+                quantization_config=quantization_config
             )
             self.model = HoboGPTModelForCausalLM(config=config)
         else:
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_name_or_path,
                 trust_remote_code=True,
-                low_cpu_mem_usage=True
+                low_cpu_mem_usage=True,
+                torch_dtype=self.torch_dtype,
+                quantization_config=quantization_config
             )
 
         if self.accelerator.is_main_process:
-            logger.info(f"total trainable parameters: {count_parameters(self.model)/1e9:.2f}B")
+            logger.info(f"total trainable parameters: {count_parameters(self.model)/1e9:.5f}B")
         
         self.model.gradient_checkpointing_enable()
         self.model.config.use_cache = False
-        
-        if self.use_fp8:
-            self.model.zero_grad(set_to_none=True)
-            with torch.no_grad():
-                convert_model(self.model)
-                torch.cuda.empty_cache()
         
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.tokenizer_name_or_path,
@@ -254,7 +208,7 @@ class Trainer:
         optimizer_grouped_parameters = [
             {
                 "params": [p for n, p in self.model.named_parameters() if not any(nd in n for nd in no_decay)],
-                "weight_decay": 0.01,
+                "weight_decay": self.weight_decay,
             },
             {
                 "params": [p for n, p in self.model.named_parameters() if any(nd in n for nd in no_decay)],
@@ -262,21 +216,56 @@ class Trainer:
             },
         ]
         
-        if self.use_fp8:
-            self.optimizer = bnb.optim.AdamW8bit(optimizer_grouped_parameters, lr=self.learning_rate)
+        if self.use_8bit or self.use_4bit:
+            if self.use_4bit:
+                from torchao.prototype.low_bit_optim import AdamW4bit
+                self.optimizer = AdamW4bit(
+                    optimizer_grouped_parameters,
+                    lr=self.learning_rate,
+                    betas=(self.adam_beta1, self.adam_beta2),
+                    eps=self.adam_epsilon
+                )
+                logger.info("using 4-bit AdamW optimizer")
+            else:
+                from bitsandbytes.optim import AdamW8bit
+                self.optimizer = AdamW8bit(
+                    optimizer_grouped_parameters,
+                    lr=self.learning_rate,
+                    betas=(self.adam_beta1, self.adam_beta2),
+                    eps=self.adam_epsilon
+                )
+                logger.info("using 4-bit AdamW optimizer")
         else:
-            self.optimizer = AdamW(optimizer_grouped_parameters, lr=self.learning_rate)
+            self.optimizer = AdamW(
+                optimizer_grouped_parameters,
+                lr=self.learning_rate,
+                betas=(self.adam_beta1, self.adam_beta2),
+                eps=self.adam_epsilon
+            )
+            logger.info("using standard AdamW optimizer")
         
         num_update_steps_per_epoch = len(self.train_dataloader) // self.gradient_accumulation_steps
         max_train_steps = self.num_epochs * num_update_steps_per_epoch
         self.lr_scheduler = get_linear_schedule_with_warmup(
             optimizer=self.optimizer,
-            num_warmup_steps=0,
+            num_warmup_steps=self.warmup_steps,
             num_training_steps=max_train_steps,
         )
 
+        if self.accelerator.is_main_process:
+            logger.info(f"total training steps: {max_train_steps}")
+            logger.info(f"warmup steps: {self.warmup_steps}")
+            logger.info(f"steps per epoch: {num_update_steps_per_epoch}")
+
     def create_dataloader(self):
-        full_dataset = load_dataset("json", data_files=self.input_jsonl, split="train")
+        full_dataset = load_dataset(path=self.dataset_dir, data_files=self.input_jsonl, split="train")
+        # full_dataset = full_dataset.select(range(100))
+        full_dataset = align_dataset(
+            full_dataset, 
+            dataset_attr=DatasetAttr(load_from="file", dataset_name=self.dataset_name), 
+            data_args=self.data_args
+        )
+        
         column_names_to_remove = list(next(iter(full_dataset)).keys())
         
         preprocess_func = partial(
@@ -291,7 +280,7 @@ class Trainer:
                 batched=True,
                 num_proc=self.data_args.preprocessing_num_workers,
                 remove_columns=column_names_to_remove,
-                desc="Preprocessing dataset"
+                desc="preprocess dataset"
             )
             self.accelerator.wait_for_everyone()
             
@@ -305,11 +294,12 @@ class Trainer:
         
         self.train_dataloader = DataLoader(
             full_dataset,
-            shuffle=False,
+            shuffle=True,
             collate_fn=data_collator,
             batch_size=self.batch_size,
             pin_memory=False,
-            num_workers=8
+            num_workers=8,
+            drop_last=True
         )
         
         counter_dataloader = DataLoader(
@@ -327,27 +317,21 @@ class Trainer:
         train_token_counter *= self.num_epochs
         
         if self.accelerator.is_main_process:
-            logger.info(f"total training token: {train_token_counter} ({train_token_counter/1e9:.2f}B)")
+            logger.info(f"total training tokens: {train_token_counter} ({train_token_counter/1e9:.2f}B)")
         
         del counter_dataloader
         gc.collect()
 
     def train_step(self, batch: Dict[str, torch.Tensor]) -> float:
         with self.accelerator.accumulate(self.model):
-            if self.use_fp8:
-                batch = prepare_batch_for_fp8(batch, self.tokenizer)
-                with fp8_autocast(enabled=True):
-                    outputs = self.model(**batch)
-                    loss = outputs[0]
-            else:
-                outputs = self.model(**batch)
-                loss = outputs[0]
+            outputs = self.model(**batch)
+            loss = outputs[0]
             
             del outputs
             
             self.accelerator.backward(loss)
             
-            if self.accelerator.sync_gradients:
+            if self.max_grad_norm is not None and self.accelerator.sync_gradients:
                 self.accelerator.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
             
             self.optimizer.step()
@@ -362,8 +346,13 @@ class Trainer:
         
         for epoch in range(self.num_epochs):
             total_loss = 0
-            progress_bar = tqdm(self.train_dataloader, desc=f"Epoch {epoch+1}/{self.num_epochs}", 
-                              disable=not self.accelerator.is_local_main_process)
+            
+            # 创建进度条
+            progress_bar = tqdm(
+                self.train_dataloader, 
+                desc=f"Epoch {epoch+1}/{self.num_epochs}", 
+                disable=not self.accelerator.is_local_main_process
+            )
             
             self.model.train()
             for step, batch in enumerate(progress_bar):
@@ -378,6 +367,7 @@ class Trainer:
                 progress_bar.set_postfix({
                     'step': f"{step + 1}",
                     'loss': f"{current_loss:.4f}",
+                    'ppl': f"{current_ppl:.2f}",
                     'lr': f"{current_lr:.2e}"
                 })
                 
@@ -403,10 +393,15 @@ class Trainer:
                         self.save_manager(epoch + 1, total_steps, current_loss, max_save=self.max_save, prefix="step")
                     
                     wandb.log(metrics, step=total_steps)
-                    
+
                 if self.accelerator.is_main_process and total_steps % self.eval_steps == 0:
-                    self.evaluate(checkpoint_dir=f"checkpoints/{self.wandb_run_name}", step_num=total_steps, data_args=self.data_args, from_scratch=self.from_scratch)
-                    
+                    self.evaluate(
+                        checkpoint_dir=f"checkpoints/{self.wandb_run_name}",
+                        step_num=total_steps,
+                        data_args=self.data_args,
+                        from_scratch=self.from_scratch
+                    )
+                
                 if step % 100 == 0:
                     gc.collect()
                     torch.cuda.empty_cache()
@@ -571,5 +566,15 @@ class Trainer:
 
 if __name__ == "__main__":
     args = parse_args()
+    args.from_scratch = True
+    # args.batch_size = 10
+    
+    # args.use_4bit = True
+    args.use_8bit = True
+    # args.use_peft = True
+    # args.target_modules = "q_proj,v_proj,lm_head"
+    # args.modules_to_save = None
+    # args.qlora = True
+    args.wandb_project = "pt_training"
     trainer = Trainer(args)
     trainer.train()

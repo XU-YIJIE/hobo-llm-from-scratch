@@ -21,8 +21,15 @@ def preprocess_pretrain_dataset(
 ) -> Dict[str, List[Any]]:
     # build grouped texts with format `X1 X2 X3 ...` if packing is enabled
     eos_token = "<|end_of_text|>" if data_args.template == "llama3" else tokenizer.eos_token
-    text_examples = [messages[0]["content"] + eos_token for messages in examples["_prompt"]]
-
+    # text_examples = [messages[0]["content"] + eos_token  for messages in examples["_prompt"]]
+    
+    text_examples = []
+    for hists, resps in zip(examples["_prompt"], examples["_response"]):
+        for hist in hists:
+            text_examples.append(hist["content"] + eos_token)
+        if resps:
+            text_examples.append(resps[0]["content"] + eos_token)
+    
     if not data_args.packing:
         if getattr(tokenizer, "add_bos_token", False):
             text_examples = [tokenizer.bos_token + example for example in text_examples]
