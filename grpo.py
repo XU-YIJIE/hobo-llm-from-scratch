@@ -4,11 +4,12 @@ from transformers import (AutoTokenizer,
                           get_linear_schedule_with_warmup)
 from datasets import Dataset
 from grpo_trainer import GRPOTrainer, GRPOConfig
-from reward_funcs import compute_json_format_reward
+from reward_funcs import reward_json_format, reward_len
 import os
 from loguru import logger
 from accelerate import Accelerator
 from transformers.data.data_collator import DataCollatorForLanguageModeling
+import numpy as np
 
 os.environ["NCCL_P2P_DISABLE"] = "1"
 os.environ["NCCL_IB_DISABLE"] = "1"
@@ -55,7 +56,7 @@ def prepare_sample_dataset(batch_size=4):
 
 def main():
     learning_rate = 1e-5
-    group_num = 4
+    group_num = 8
     mini_batch_size = 1
     gradient_accumulation_steps = 8
     max_grad_norm = 1
@@ -116,7 +117,8 @@ def main():
         lr_scheduler=lr_scheduler,
         accelerator=accelerator,
     )
-    
+    # reward_funcs = [reward_json_format, reward_length]
+    reward_funcs = [reward_len]
     for epoch in range(num_epochs):
         print(f"Epoch: {epoch + 1}/{num_epochs}")
         
@@ -149,6 +151,7 @@ def main():
                 "num_return_sequences": group_num,
             }
             gen_count = 0
+            all_rewards = []
             while True:
                 responses = trainer.generate(
                     input_ids,
@@ -158,25 +161,34 @@ def main():
 
                 response_ids = responses[:, input_len:]
                 response_texts = tokenizer.batch_decode(response_ids, skip_special_tokens=True)
-                scores = compute_json_format_reward(response_texts)
                 
-                if len(set(scores)) > 1:
+                # print(response_texts)
+                
+                for reward_func in reward_funcs:
+                    rewards = np.array(reward_func(response_texts))  # length: group_num * batch_size
+                    all_rewards.append(rewards)  # length: func_num
+                all_rewards = np.array(all_rewards)  # func_num, group_num * batch_size
+                all_rewards = all_rewards.sum(axis=0)  # group_num * batch_size
+                
+                if len(set(all_rewards)) > 1:
                     break
-                # scores如果输出单一值则没有训练意义
-                logger.info(f"generation {gen_count} times, no valid JSON, continue")
-                gen_count += 1
+                else:
+                    # scores如果输出单一值则没有训练意义
+                    logger.info(f"invalid generation with count {gen_count}, continue")
+                    gen_count += 1
+                    all_rewards = []
 
             if accelerator.is_main_process:
-                logger.info(f"Batch {batch_idx + 1}, avg_score: {sum(scores)/len(scores):.3f}")
+                logger.info(f"Batch {batch_idx + 1}, avg_score: {sum(all_rewards)/len(all_rewards):.3f}")
 
             # 扩展input_ids，对其responses
             input_ids = torch.repeat_interleave(input_ids, repeats=config.group_num, dim=0)
-            scores = torch.tensor(scores, device=accelerator.device)
+            rewards = torch.tensor(all_rewards, device=accelerator.device)
             
             state = trainer.step(
                 query_ids=input_ids,
                 response_ids=response_ids,
-                scores=scores
+                reward_scores=rewards
             )
             
         # model.save_pretrained(f"json_model_epoch_{epoch+1}")
@@ -184,3 +196,16 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
+    # response_texts = self.tokenizer.batch_decode(response_ids, skip_special_tokens=True)
+    # all_rewards = []
+    # for reward_func in reward_funcs:
+    #     rewards = torch.tensor(reward_func(response_texts), device=self.current_device).unsqueeze(dim=0)  # length: group_num * batch_size
+    #     all_rewards.append(rewards)  # length: func_num
+    # all_rewards = torch.cat(all_rewards, dim=0).sum(dim=0)
+    # advantages = self.grpo_advantage(all_rewards)  # (group_num * batch_size)
+    # if set(advantages.unique()) == 1:
+    #     if self.accelerator.is_main_process:
+    #         logger.warning(f"all rewards are the same, skip this step")
+    #     del all_rewards, advantages
+    #     return stats, "skip"

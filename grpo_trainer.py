@@ -8,6 +8,8 @@ import time
 import numpy as np
 from tqdm import tqdm
 import json
+from typing import Callable
+from loguru import logger
 
 from grpo_config import GRPOConfig
 
@@ -83,7 +85,6 @@ class GRPOTrainer:
         rewards = rewards.to(torch.float32)
         mean = rewards.mean(dim=0, keepdim=True)
         std = rewards.std(dim=0, keepdim=True)
-        
         advantages = (rewards - mean) / (std + epsilon)
         return advantages
 
@@ -91,27 +92,26 @@ class GRPOTrainer:
         self,
         query_ids: torch.LongTensor,
         response_ids: torch.LongTensor,
-        scores: List[torch.FloatTensor],
+        reward_scores: torch.FloatTensor,
     ):
         """
-        queries: group_num * batch_size, query_len
-        responses: group_num * batch_size, response_len
+        query_ids: group_num * batch_size, query_len
+        response_ids: group_num * batch_size, response_len
         """
         self.model.train()
+        stats = []
         
         batch_size = query_ids.shape[0] // self.config.group_num
         responses_mask = response_ids != self.tokenizer.pad_token_id
+        advantages = self.grpo_advantage(reward_scores)  # (group_num * batch_size)
         
         with torch.no_grad():
             # 打断梯度
             old_logprobs = self.get_all_logprobs(self.model, query_ids, response_ids)  
             # (group_num * batch_size, response_len)
             ref_logprobs = self.get_all_logprobs(self.ref_model, query_ids, response_ids)  
-        
-        advantages = self.grpo_advantage(scores)  # (group_num * batch_size)
+
         batch_indice = torch.arange(batch_size)
-        
-        stats = []
         for mini_batch_start in range(0, batch_size, self.config.mini_batch_size):
             mini_batch_end = mini_batch_start + self.config.mini_batch_size
             mini_batch_inds = batch_indice[mini_batch_start:mini_batch_end]
@@ -140,9 +140,9 @@ class GRPOTrainer:
                 
                 unbiased_kl = torch.exp(mini_ref_logprobs - new_logprobs) - (mini_ref_logprobs - new_logprobs) - 1
                 
-                loss = pg_loss + self.config.beta * unbiased_kl
+                pg_loss = pg_loss + self.config.beta * unbiased_kl
                 loss = ((pg_loss * mini_responses_mask).sum(dim=1) / mini_responses_mask.sum(dim=1)).mean()
-                del mini_responses_mask
+                del mini_responses_mask, unbiased_kl
                 
                 print(loss.detach().float().cpu())
                 
@@ -161,8 +161,11 @@ class GRPOTrainer:
         query_tensor: Union[torch.Tensor],
         **generation_kwargs
     ):
-        self.model.eval()
-        return self.model.generate(
-            input_ids=query_tensor,
-            **generation_kwargs
-        )
+        with torch.no_grad():
+            self.model.eval()
+            outputs = self.model.generate(
+                input_ids=query_tensor,
+                **generation_kwargs
+            )
+            self.model = self.model.to(self.accelerator.device)
+            return outputs.to(self.accelerator.device)

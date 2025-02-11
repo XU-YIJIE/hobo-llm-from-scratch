@@ -1,31 +1,39 @@
 import json
 from typing import List
+import re
 
-def compute_json_format_reward(responses: List[str]) -> List[float]:
+# def reward_length(completions, **kwargs):
+#     '''Reward function that gives higher scores to longer completions.'''
+#     return [float(len(completion)) for completion in completions]
+
+def reward_len(completions, **kwargs):
     '''
-    计算基于JSON格式的奖励
+    Reward function that gives higher scores to completions that are close to 20 tokens.
     '''
+    return [-abs(20 - len(completion)) for completion in completions]
+
+
+def reward_json_format(responses: List[str]) -> List[float]:
     rewards = []
     for response in responses:
         cleaned_text = response.strip()
         
         if "```json" in cleaned_text:
-            # 检查是否只包含```json {...} ```格式
             parts = cleaned_text.split("```json", 1)
-            if parts[0].strip():  # ```json前有文本
+            if parts[0].strip():
                 rewards.append(-1.0)
                 continue
                 
-            if len(parts) != 2:  # 不完整的```json
+            if len(parts) != 2:
                 rewards.append(-1.0)
                 continue
                 
             json_part = parts[1].strip()
-            if not json_part.endswith("```"):  # 没有结尾的```
+            if not json_part.endswith("```"):
                 rewards.append(-1.0)
                 continue
                 
-            json_content = json_part[:-3].strip()  # 移除结尾的```
+            json_content = json_part[:-3].strip()
             
             try:
                 parsed_json = json.loads(json_content)
@@ -36,7 +44,6 @@ def compute_json_format_reward(responses: List[str]) -> List[float]:
             
         try:
             parsed_json = json.loads(cleaned_text)
-            # 确保没有额外文本
             parsed_str = json.dumps(parsed_json)
             if cleaned_text.strip() == parsed_str:
                 rewards.append(1.0)
@@ -44,73 +51,19 @@ def compute_json_format_reward(responses: List[str]) -> List[float]:
                 rewards.append(-1.0)
         except json.JSONDecodeError:
             rewards.append(-1.0)
-            
     return rewards
 
 
-def is_valid_json(text: str) -> bool:
-    '''
-    检查文本是否为有效的JSON格式
-    
-    Args:
-        text (str): 需要检查的文本
-        
-    Returns:
-        bool: 如果是有效的JSON格式返回True,否则返回False
-    '''
-    try:
-        # 尝试解析JSON
-        json.loads(text)
-        return True
-    except json.JSONDecodeError:
-        return False
-    
-
-def get_json_depth(obj, depth=1):
-    '''
-    计算JSON对象的最大深度
-    '''
-    if isinstance(obj, dict):
-        if not obj:
-            return depth
-        return max(get_json_depth(v, depth + 1) for v in obj.values())
-    elif isinstance(obj, list):
-        if not obj:
-            return depth
-        return max(get_json_depth(v, depth + 1) for v in obj)
-    return depth
-
-def count_json_fields(obj):
-    '''
-    计算JSON对象中的字段总数
-    '''
-    count = 0
-    if isinstance(obj, dict):
-        count += len(obj)
-        for v in obj.values():
-            if isinstance(v, (dict, list)):
-                count += count_json_fields(v)
-    elif isinstance(obj, list):
-        for v in obj:
-            if isinstance(v, (dict, list)):
-                count += count_json_fields(v)
-    return count
+# def reward_strict_thinking_format(completions, **kwargs) -> list[float]:
+#     pattern = r"^<think>\n.*?\n</think>\n<answer>\n.*?\n</answer>\n$"
+#     responses = [completion[0]["content"] for completion in completions]
+#     matches = [re.match(pattern, r) for r in responses] 
+#     return [0.5 if match else 0.0 for match in matches]
 
 
-def compute_detailed_json_reward(text: str) -> float:
-    '''
-    基于JSON的复杂度计算更细粒度的奖励
-    '''
-    if not is_valid_json(text):
-        return 0.0
-    
-    try:
-        json_obj = json.loads(text)
-        depth = get_json_depth(json_obj)
-        num_fields = count_json_fields(json_obj)
-        
-        # 根据复杂度给出额外奖励
-        bonus = min(0.5, (depth * 0.1 + num_fields * 0.05))
-        return 1.0 + bonus
-    except:
-        return 0.0
+def format_reward_func(completions, **kwargs):
+    """Reward function that checks if the completion has a specific format."""
+    pattern = r"^<think>.*?</think><answer>.*?</answer>$"
+    completion_contents = [completion[0]["content"] for completion in completions]
+    matches = [re.match(pattern, content) for content in completion_contents]
+    return [1.0 if match else 0.0 for match in matches]
