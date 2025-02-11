@@ -161,11 +161,8 @@ class GRPOTrainer:
         query_tensor: Union[torch.Tensor],
         **generation_kwargs
     ):
-        with torch.no_grad():
-            self.model.eval()
-            outputs = self.model.generate(
-                input_ids=query_tensor,
-                **generation_kwargs
-            )
-            self.model = self.model.to(self.accelerator.device)
-            return outputs.to(self.accelerator.device)
+        outputs = self.model.generate(
+            input_ids=query_tensor,
+            **generation_kwargs
+        )
+        return outputs
