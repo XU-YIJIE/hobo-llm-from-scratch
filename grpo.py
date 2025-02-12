@@ -22,16 +22,19 @@ os.environ["NCCL_IB_DISABLE"] = "1"
 
 
 def main():
-    learning_rate = 1e-5
-    group_num = 8
-    mini_batch_size = 1
-    gradient_accumulation_steps = 8
-    max_grad_norm = 1
-    seed = 1024
-    batch_size = 4
-    num_epochs = 100
     model_name = "lm_models/Qwen2.5-0.5B-Instruct"  # 使用Qwen2.5-0.5B-Instruct作为基础模型
     dataset_dir = "dataset/tldr"
+    
+    learning_rate = 1e-5
+    group_num = 8
+    mini_batch_size = 2
+    batch_size = 8  # 每个global_step更新 batch_size / mini_batch_size 次
+    gradient_accumulation_steps = 8  
+    # 每 gradient_accumulation_steps / (batch_size / mini_batch_size) 个global_step反向传播一次
+    num_epochs = 10
+    
+    max_grad_norm = 1
+    seed = 1024
     
     # config
     config = GRPOConfig(

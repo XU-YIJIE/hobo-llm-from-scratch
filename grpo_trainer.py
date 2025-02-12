@@ -43,7 +43,6 @@ class GRPOTrainer:
         
         self.accelerator = accelerator
         self.current_device = self.accelerator.device
-        # self.json_rewards_log = []
 
     def get_per_token_logps(self, model, input_ids, num_logits_to_keep):
         # We add 1 to `num_logits_to_keep` because the last logits of the sequence is later excluded
@@ -153,6 +152,7 @@ class GRPOTrainer:
                                                    self.config.max_grad_norm)
                     
                 self.optimizer.step()
+                self.lr_scheduler.step()
                 self.optimizer.zero_grad()
                 
         return stats
