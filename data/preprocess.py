@@ -85,6 +85,22 @@ def preprocess_supervised_dataset(
     return model_inputs
 
 
+def preprocess_rl_dataset_v1(
+    examples: Dict[str, List[Any]],
+    tokenizer: PreTrainedTokenizer,
+) -> Dict[str, List[List[int]]]:
+    model_inputs = {"input_ids": []}
+    for i in range(len(examples["_prompt"])):
+        system = examples["_system"][i]
+        prompt = examples["_prompt"][i]
+        # response = examples["_response"][i]
+        input_str = tokenizer.apply_chat_template([system] + prompt, template=tokenizer.chat_template, tokenize=False, add_generation_prompt=True)
+        input_ids = tokenizer(input_str, return_tensors="pt", add_special_tokens=True, padding=True)["input_ids"]
+        model_inputs["input_ids"].append(input_ids[0])
+        # model_inputs["responses"].append(response)
+    return model_inputs
+
+
 # referenced from llamafactory 
 def _encode_supervised_example(
     prompt: Sequence[Dict[str, str]],

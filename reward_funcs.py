@@ -6,11 +6,11 @@ import re
 #     '''Reward function that gives higher scores to longer completions.'''
 #     return [float(len(completion)) for completion in completions]
 
-def reward_punish_too_long(completions, **kwargs):
+def reward_punish_too_long(completions, punish_length=20):
     '''
     Reward function that gives higher scores to completions that are close to 20 tokens.
     '''
-    return [-abs(20 - len(completion)) for completion in completions]
+    return [-abs(punish_length - len(completion)) for completion in completions]
 
 
 def reward_json_format(responses: List[str]) -> List[float]:

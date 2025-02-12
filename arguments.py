@@ -9,7 +9,7 @@ def parse_args():
     parser.add_argument("--dataset_name", type=str, default="sharegpt_gpt4", help="dataset_name")
     parser.add_argument("--template", type=str, default="qwen", help="template")
     parser.add_argument("--cutoff_len", type=int, default=1024, help="cutoff_len")
-    
+    parser.add_argument("--preprocessing_num_workers", type=int, default=8, help="preprocessing_num_workers")
     # model
     parser.add_argument("--model_name_or_path", type=str, default="lm_models/Qwen2.5-0.5B-Instruct", help="model_name_or_path")
     parser.add_argument("--tokenizer_name_or_path", type=str, default="lm_models/Qwen2.5-0.5B-Instruct", help="tokenizer_name_or_path")

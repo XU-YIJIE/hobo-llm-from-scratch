@@ -88,6 +88,7 @@ class Trainer:
         self.input_jsonl = args.input_jsonl
         self.dataset_name = args.dataset_name
         self.dataset_dir = args.dataset_dir
+        self.preprocessing_num_workers = args.preprocessing_num_workers
         
         # model
         self.model_name_or_path = args.model_name_or_path
@@ -123,7 +124,7 @@ class Trainer:
                                        cutoff_len=args.cutoff_len, 
                                        train_on_prompt=False, 
                                        mask_history=False, 
-                                       preprocessing_num_workers=8)
+                                       preprocessing_num_workers=self.preprocessing_num_workers)
         
         self.accelerator = Accelerator(gradient_accumulation_steps=self.gradient_accumulation_steps)
         self.initializer()
@@ -293,7 +294,7 @@ class Trainer:
     def create_dataloader(self):
         full_dataset = load_dataset(path=self.dataset_dir, data_files=self.input_jsonl, split="train")  # 可选sharegpt或deepctrl作为训练数据
         
-        # full_dataset = full_dataset.select(range(100))
+        full_dataset = full_dataset.select(range(100))
         full_dataset = align_dataset(full_dataset, dataset_attr=DatasetAttr(load_from="file", dataset_name=self.dataset_name), data_args=self.data_args)
         
         column_names_to_remove = list(next(iter(full_dataset)).keys())
@@ -626,6 +627,11 @@ class Trainer:
 
 if __name__ == "__main__":
     args = parse_args()
+    args.preprocessing_num_workers = 1
+    args.dataset_dir = "dataset/deepctrl-sft-data"
+    args.dataset_name = "deepctrl-sft-data"
+    args.input_jsonl = "sft_data_en.jsonl"
+    
     args.from_scratch = False
     args.use_peft = True
     args.target_modules = "q_proj,v_proj,lm_head"

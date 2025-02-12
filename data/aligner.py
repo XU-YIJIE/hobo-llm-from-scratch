@@ -215,11 +215,10 @@ def convert_sharegpt(
         logger.warning("Skipping this abnormal example.")
         prompt, response = [], []
 
-
     output = {
+        "_system": system,
         "_prompt": prompt,
         "_response": response,
-        "_system": system,
         "_tools": example[dataset_attr.tools] if dataset_attr.tools else "",
         "_images": None,
         "_videos": None,
@@ -246,15 +245,32 @@ def convert_deepctrl(dataset: Dataset):
         
         # 构建符合训练格式的数据结构
         converted_item = {
+            "_system": item["instruction"] if item["instruction"] else "",
             "_prompt": conversations[:-1],  # 除最后一个assistant回复外的所有对话
             "_response": [conversations[-1]],  # 最后一个assistant回复
-            "_system": item["instruction"] if item["instruction"] else "",
             "_tools": None,
             "id": item["id"],
             "language": item["language"]
         }
         converted_data.append(converted_item)
     
+    dataset = Dataset.from_list(converted_data)
+    return dataset
+
+
+def convert_tldr(dataset: Dataset):
+    system_prompt = '''You are a summarization assistant. When you see a Reddit post after the "SUBREDDIT:" identifier, provide a concise summary of the post content. Output only the summary without any additional text, explanations, or meta-commentary. Focus on capturing the main points and key information from the post in a clear and direct manner.'''
+    converted_data = []
+    for item in dataset:
+        system = {"role": "system", "content": system_prompt}
+        prompt = [{"role": "user", "content": item["prompt"]}]
+        response = [{"role": "assistant", "content": item["completion"]}]
+        converted_item = {
+            "_system": system,
+            "_prompt": prompt,
+            "_response": response
+        }
+        converted_data.append(converted_item)
     dataset = Dataset.from_list(converted_data)
     return dataset
 
