@@ -294,7 +294,7 @@ class Trainer:
     def create_dataloader(self):
         full_dataset = load_dataset(path=self.dataset_dir, data_files=self.input_jsonl, split="train")  # 可选sharegpt或deepctrl作为训练数据
         
-        full_dataset = full_dataset.select(range(100))
+        # full_dataset = full_dataset.select(range(100))
         full_dataset = align_dataset(full_dataset, dataset_attr=DatasetAttr(load_from="file", dataset_name=self.dataset_name), data_args=self.data_args)
         
         column_names_to_remove = list(next(iter(full_dataset)).keys())

@@ -63,7 +63,7 @@ def main():
     
     # dataprocess
     full_dataset = load_dataset(path=dataset_dir, split="train")
-    full_dataset = full_dataset.select(range(100))
+    # full_dataset = full_dataset.select(range(100))
     full_dataset = convert_tldr(full_dataset)
     column_names = list(next(iter(full_dataset)).keys())
     preprocess_func = partial(
@@ -101,7 +101,7 @@ def main():
     )
     
     # reward_funcs = [reward_json_format, reward_length]
-    reward_funcs = [partial(reward_punish_too_long, punish_length=20)]
+    reward_funcs = [partial(reward_punish_too_long, punish_length=100)]
     for epoch in range(num_epochs):
         print(f"Epoch: {epoch + 1}/{num_epochs}")
         
