@@ -4,7 +4,7 @@ from transformers import (AutoTokenizer,
                           get_linear_schedule_with_warmup)
 from datasets import Dataset
 from grpo_trainer import GRPOTrainer, GRPOConfig
-from reward_funcs import reward_json_format, reward_len
+from reward_funcs import reward_json_format, reward_punish_too_long
 import os
 from loguru import logger
 from accelerate import Accelerator
@@ -118,7 +118,7 @@ def main():
         accelerator=accelerator,
     )
     # reward_funcs = [reward_json_format, reward_length]
-    reward_funcs = [reward_len]
+    reward_funcs = [reward_punish_too_long]
     for epoch in range(num_epochs):
         print(f"Epoch: {epoch + 1}/{num_epochs}")
         
@@ -153,6 +153,8 @@ def main():
             gen_count = 0
             all_rewards = []
             while True:
+                if accelerator.is_main_process:
+                    logger.info(f"starting generation {gen_count} times")
                 responses = trainer.generate(
                     input_ids,
                     **gen_config
@@ -179,10 +181,10 @@ def main():
                     all_rewards = []
 
             if accelerator.is_main_process:
-                logger.info(f"Batch {batch_idx + 1}, avg_score: {sum(all_rewards)/len(all_rewards):.3f}")
+                logger.info(f"Batch {batch_idx + 1}, avg_reward_score: {sum(all_rewards)/len(all_rewards):.3f}")
 
-            # 扩展input_ids，对其responses
-            input_ids = torch.repeat_interleave(input_ids, repeats=config.group_num, dim=0)
+            # 扩展input_ids，对齐responses
+            input_ids = input_ids.unsqueeze(1).expand(-1, config.group_num, -1).reshape(-1, input_ids.size(-1))
             rewards = torch.tensor(all_rewards, device=accelerator.device)
             
             state = trainer.step(

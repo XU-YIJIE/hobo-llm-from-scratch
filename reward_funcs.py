@@ -6,7 +6,7 @@ import re
 #     '''Reward function that gives higher scores to longer completions.'''
 #     return [float(len(completion)) for completion in completions]
 
-def reward_len(completions, **kwargs):
+def reward_punish_too_long(completions, **kwargs):
     '''
     Reward function that gives higher scores to completions that are close to 20 tokens.
     '''

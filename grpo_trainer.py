@@ -99,6 +99,7 @@ class GRPOTrainer:
         response_ids: group_num * batch_size, response_len
         """
         self.model.train()
+        self.model.gradient_checkpointing_enable()
         stats = []
         
         batch_size = query_ids.shape[0] // self.config.group_num
@@ -160,7 +161,9 @@ class GRPOTrainer:
         self,
         query_tensor: Union[torch.Tensor],
         **generation_kwargs
-    ):
+    ):  
+        self.model.eval()
+        self.model.gradient_checkpointing_disable()
         outputs = self.model.generate(
             input_ids=query_tensor,
             **generation_kwargs
