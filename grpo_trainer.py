@@ -61,21 +61,21 @@ class GRPOTrainer:
     def get_all_logprobs(
         self,
         model,
-        query_ids: torch.Tensor,  # 输入padding后的
-        response_ids: torch.Tensor,  # 输入padding后的
+        prompt_ids: torch.Tensor,  # 输入padding后的
+        completion_ids: torch.Tensor,  # 输入padding后的
     ):
-        batch_size = query_ids.shape[0] // self.config.group_num
+        batch_size = prompt_ids.shape[0] // self.config.group_num
         mini_batch_size = self.config.mini_batch_size
         all_logprobs = []
         
         for i in range(0, batch_size, mini_batch_size):
-            mini_query_ids = query_ids[i * self.config.group_num: (i + mini_batch_size) * self.config.group_num]
-            mini_response_ids = response_ids[i * self.config.group_num: (i + mini_batch_size) * self.config.group_num]
-            input_ids = torch.cat([mini_query_ids, mini_response_ids], dim=1)
-            logprobs = self.get_per_token_logps(model, input_ids, num_logits_to_keep=response_ids.shape[1])  # (mini_batch_size * group_num, seq_len)
+            mini_prompt_ids = prompt_ids[i * self.config.group_num: (i + mini_batch_size) * self.config.group_num]
+            mini_completion_ids = completion_ids[i * self.config.group_num: (i + mini_batch_size) * self.config.group_num]
+            input_ids = torch.cat([mini_prompt_ids, mini_completion_ids], dim=1)
+            logprobs = self.get_per_token_logps(model, input_ids, num_logits_to_keep=completion_ids.shape[1])  # (mini_batch_size * group_num, seq_len)
             all_logprobs.append(logprobs)
             
-            del input_ids, logprobs, mini_query_ids, mini_response_ids
+            del input_ids, logprobs, mini_prompt_ids, mini_completion_ids
             torch.cuda.empty_cache()
             
         return torch.cat(all_logprobs)
@@ -89,27 +89,27 @@ class GRPOTrainer:
 
     def step(
         self,
-        query_ids: torch.LongTensor,
-        response_ids: torch.LongTensor,
+        prompt_ids: torch.LongTensor,
+        completion_ids: torch.LongTensor,
         reward_scores: torch.FloatTensor,
     ):
         """
-        query_ids: group_num * batch_size, query_len
-        response_ids: group_num * batch_size, response_len
+        prompt_ids: group_num * batch_size, prompt_len
+        completion_ids: group_num * batch_size, completion_len
         """
         self.model.train()
         self.model.gradient_checkpointing_enable()
         stats = []
         
-        batch_size = query_ids.shape[0] // self.config.group_num
-        responses_mask = response_ids != self.tokenizer.pad_token_id
+        batch_size = prompt_ids.shape[0] // self.config.group_num
+        completions_mask = completion_ids != self.tokenizer.pad_token_id
         advantages = self.grpo_advantage(reward_scores)  # (group_num * batch_size)
         
         with torch.no_grad():
             # 打断梯度
-            old_logprobs = self.get_all_logprobs(self.model, query_ids, response_ids)  
-            # (group_num * batch_size, response_len)
-            ref_logprobs = self.get_all_logprobs(self.ref_model, query_ids, response_ids)  
+            old_logprobs = self.get_all_logprobs(self.model, prompt_ids, completion_ids)  
+            # (group_num * batch_size, completion_len)
+            ref_logprobs = self.get_all_logprobs(self.ref_model, prompt_ids, completion_ids)  
 
         batch_indice = torch.arange(batch_size)
         for mini_batch_start in range(0, batch_size, self.config.mini_batch_size):
@@ -120,15 +120,15 @@ class GRPOTrainer:
             # start = mini_batch_start * self.config.group_num
             # end = (start + self.config.mini_batch_size) * self.config.group_num
 
-            mini_query_ids, mini_response_ids, mini_old_logprobs, mini_ref_logprobs, mini_responses_mask, mini_advantages = query_ids[mini_batch_inds], response_ids[mini_batch_inds], old_logprobs[mini_batch_inds], ref_logprobs[mini_batch_inds], responses_mask[mini_batch_inds], advantages[mini_batch_inds]  # mini_old_logprobs: group_num * mini_batch_size, response_len
+            mini_prompt_ids, mini_completion_ids, mini_old_logprobs, mini_ref_logprobs, mini_completions_mask, mini_advantages = prompt_ids[mini_batch_inds], completion_ids[mini_batch_inds], old_logprobs[mini_batch_inds], ref_logprobs[mini_batch_inds], completions_mask[mini_batch_inds], advantages[mini_batch_inds]  # mini_old_logprobs: group_num * mini_batch_size, completion_len
             
             with self.accelerator.accumulate(self.model):
                 new_logprobs = self.get_all_logprobs(
                     self.model,
-                    mini_query_ids,
-                    mini_response_ids,
+                    mini_prompt_ids,
+                    mini_completion_ids,
                 )
-                del mini_query_ids, mini_response_ids
+                del mini_prompt_ids, mini_completion_ids
                 
                 ratio = torch.exp(new_logprobs - mini_old_logprobs)
                 del mini_old_logprobs
@@ -141,10 +141,10 @@ class GRPOTrainer:
                 unbiased_kl = torch.exp(mini_ref_logprobs - new_logprobs) - (mini_ref_logprobs - new_logprobs) - 1
                 
                 pg_loss = pg_loss + self.config.beta * unbiased_kl
-                loss = ((pg_loss * mini_responses_mask).sum(dim=1) / mini_responses_mask.sum(dim=1)).mean()
-                del mini_responses_mask, unbiased_kl
+                loss = ((pg_loss * mini_completions_mask).sum(dim=1) / mini_completions_mask.sum(dim=1)).mean()
+                del mini_completions_mask, unbiased_kl
                 
-                print(loss.detach().float().cpu())
+                # print(loss.detach().float().cpu())
                 
                 self.accelerator.backward(loss)
                 if self.config.max_grad_norm is not None:
@@ -159,13 +159,13 @@ class GRPOTrainer:
 
     def generate(
         self,
-        query_tensor: Union[torch.Tensor],
+        prompt_tensor: Union[torch.Tensor],
         **generation_kwargs
     ):  
         self.model.eval()
         self.model.gradient_checkpointing_disable()
         outputs = self.model.generate(
-            input_ids=query_tensor,
+            input_ids=prompt_tensor,
             **generation_kwargs
         )
         return outputs

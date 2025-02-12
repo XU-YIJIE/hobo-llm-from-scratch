@@ -263,7 +263,7 @@ def convert_tldr(dataset: Dataset):
     converted_data = []
     for item in dataset:
         system = {"role": "system", "content": system_prompt}
-        prompt = [{"role": "user", "content": item["prompt"]}]
+        prompt = [{"role": "user", "content": item["prompt"].strip(" TL;DR:")}]
         response = [{"role": "assistant", "content": item["completion"]}]
         converted_item = {
             "_system": system,
