@@ -42,6 +42,10 @@ accelerate config中添加配置
 
 基于deepspeed.pipe.PipelineModule 实现2d并行 (dp + pp)，待开发。。
 
+### 3. grpo 实现
+
+grpo主程序grpo.py
+
 ## 项目结构
 
 ```
@@ -80,7 +84,9 @@ reward_funcs.py
 | ---------------- | -------------------- | -------------------- |
 |[shibing624/sharegpt_gpt4](https://huggingface.co/datasets/shibing624/sharegpt_gpt4)| ShareGPT中挑选出的GPT4多轮问答数据，多语言问答。|sft               |
 |[deepctrl/deepctrl-sft-data](https://www.modelscope.cn/datasets/deepctrl/deepctrl-sft-data/summary)|匠数大模型SFT数据集是一个由匠数科技精心搜集整理的高质量数据集,包含10M条数据的中文数据集和包含2M条数据的英文数据集|sft               |
-
+|[open-thoughts/OpenThoughts-114k](https://huggingface.co/datasets/open-thoughts/OpenThoughts-114k)|Open synthetic reasoning dataset|grpo               |
+|[swulling/gsm8k_chinese](https://huggingface.co/datasets/swulling/gsm8k_chinese)|gsm8k chinese|grpo               |
+|[trl-lib/tldr](https://huggingface.co/datasets/trl-lib/tldr)|gsm8k chinese|grpo               |
 ## 支持的模型
 | 模型名称     | 介绍               |
 | ---------------- | -------------------- |
@@ -90,8 +96,8 @@ reward_funcs.py
 ```bash
 git clone https://github.com/XU-YIJIE/hobo-llm.git
 
-# 更便捷且安全的方式：使用nvidia官方镜像作为开发环境
-docker pull nvcr.io/nvidia/pytorch:23.12-py3
+# use nvidia ngc image as development environment
+docker pull nvcr.io/nvidia/pytorch:24.01-py3
 
 or
 
@@ -99,12 +105,12 @@ conda create -n hobo-llm python=3.10
 pip install -r requirements.txt
 ```
 
-### sft训练
+### sft
 
 ```bash
-# sft训练
+# sft
 python sft_accelerator.py \
-    --from_scratch True \  # 使用自定义模型
+    --from_scratch True \  # use custom model and training from scratch
     --tokenizer_name_or_path "lm_models/Qwen2.5-0.5B-Instruct" \
     --dataset_dir "dataset/sharegpt_gpt4" \
     --dataset_name "sharegpt_gpt4" \
@@ -117,6 +123,12 @@ python sft_accelerator.py \
     --device "cuda" \
     --seed 1024
 
-# accelerate deepspeed 训练
+# accelerate deepspeed training
 bash scripts/train_accelerate_sft.sh
+```
+
+### grpo
+```bash
+# grpo
+python grpo.py
 ```
