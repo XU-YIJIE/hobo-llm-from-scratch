@@ -120,13 +120,3 @@ python sft_accelerator.py \
 # accelerate deepspeed 训练
 bash scripts/train_accelerate_sft.sh
 ```
-
-## 开发计划
-- 模型架构添加MOE模块
-- 实现deepspeed pipemodule范式的训练，以实现2d并行（pp + dp）
-- 从0到1训练一个 0.5b 大小的chat模型
-- 补充模型测评代码，批量输出模型性能报告
-- 补充dpo/ppo流程
-- 完成grpo代码和流程
-    - 验证训练准确性，并完善训练流程，补充log to wandb
-    - 实现更泛用的 对话式llm scorer，基于和更大的LLM对话给小模型输出结果打分，得到更细腻的reward
