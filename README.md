@@ -2,21 +2,21 @@
 
 ![License](https://img.shields.io/badge/License-Apache%202.0-green)
 
-从0到1实现LLM训练代码（pt/sft/grpo）。致力于兼顾教学性和实用性，适配中小型训练场景，支持多机多卡训练。尽量少地依赖第三方库，提升可读性的同时确保通用性
+Implementation of LLM training code (pt/sft/grpo) from scratch. Focused on balancing educational value and practicality, suitable for small to medium-scale training scenarios, supporting multi-node multi-GPU training. Minimizes third-party library dependencies to enhance readability while ensuring versatility.
 
-## 亮点
+## Highlights
 
-### 1. 从0到1实现的类Llama2架构模型
-模型结构详见modeling_hobo.py
+### 1. Llama2-like Architecture Model Implemented from Scratch
+Model structure details in modeling_hobo.py
 
-实现了必要功能，并简化代码逻辑，提升可读性
-- 支持 FlashAttention-2 加速
-- 实现 Grouped Query Attention (GQA)
-- 集成 DeepSpeed 分布式训练
-- 支持 8bit/4bit 量化训练
-- 支持 lora/qlora
+Implements essential features with simplified code logic for better readability
+- Supports FlashAttention-2 acceleration
+- Implements Grouped Query Attention (GQA)
+- Integrates DeepSpeed distributed training
+- Supports 8bit/4bit quantization training
+- Supports lora/qlora
 
-模型结构参数:
+Model structure parameters:
 ```python
 lm_config = MyConfig(
     vocab_size=151936,
@@ -31,68 +31,69 @@ lm_config = MyConfig(
 )
 # model_size == 0.45b
 ```
-采用qwen2.5的tokenizer和vocab.json
+Uses qwen2.5's tokenizer and vocab.json
 
-### 2. 基于deepspeed支持多机多卡训练
+### 2. Multi-node Multi-GPU Training Support with DeepSpeed
     
-accelerate config中添加配置
+Add configuration in accelerate config:
     deepspeed_hostfile: ./configs/hostfile
 
-并在hostfile中配置局域网ip节点即可实现基于deepspeed的多机多卡训练
+Configure LAN IP nodes in the hostfile to enable multi-node multi-GPU training based on deepspeed
 
-基于deepspeed.pipe.PipelineModule 实现2d并行 (dp + pp)，待开发。。
+2D parallelism (dp + pp) implementation based on deepspeed.pipe. PipelineModule is under development...
 
-### 3. grpo 实现
+### 3. GRPO Implementation
 
-grpo主程序grpo.py
+GRPO main program in grpo.py
 
-## 项目结构
+## Project Structure
 
 ```
 Hobo-LLM/
 ├── configs/                # accelerate deepspeed configs
-├── data/                  # 数据预处理(基于LlamaFactory)
-├── scripts/              # shell脚本
-├── modeling_hobo.py      # HoboGPT模型架构定义
-├── pt.py                # 预训练主程序
-├── sft_accelerator.py   # 完整SFT实现(DeepSpeed/8-bit/AMP)
-├── sft_amp.py          # 添加了混合精度训练的SFT(AMP/8-bit)
-├── sft_vanilla.py      # 最扁平的SFT实现
-├── grpo.py            # GRPO主程序（开发中）
-├── grpo_trainer.py    # GRPO训练器实现（开发中）
-└── reward_funcs.py   # GRPO奖励函数库（开发中）
+├── data/                  # Data preprocessing (based on LlamaFactory)
+├── scripts/              # shell scripts
+├── modeling_hobo.py      # HoboGPT model architecture definition
+├── pt.py                # Pre-training main program
+├── sft_accelerator.py   # Complete SFT implementation (DeepSpeed/8-bit/AMP)
+├── sft_amp.py          # SFT with mixed precision training (AMP/8-bit)
+├── sft_vanilla.py      # Simplified SFT implementation
+├── grpo.py            # GRPO main program (in development)
+├── grpo_trainer.py    # GRPO trainer implementation (in development)
+└── reward_funcs.py   # GRPO reward function library (in development)
 
 pt.py              
-    完整的pretrain流程
+    Complete pretrain workflow
 sft_accelerator.py 
-    功能最全，集成 DeepSpeed 分布式训练，8-bit 量化训练，amp混合精度训练，wandb实时记录指标和生成效果
+    Most comprehensive, integrates DeepSpeed distributed training, 8-bit quantization training, amp mixed precision training, wandb real-time metrics and generation effect tracking
 sft_amp.py 
-    在vanilla基础上重构，集成amp混合进度训练，8-bit 量化训练，amp混合精度训练
+    Refactored from vanilla, integrates amp mixed precision training, 8-bit quantization training
 sft_vanilla.py
-    扁平的sft流程，且具备分布式训练功能。移除了非必要的功能，可读性最好
+    Flat sft workflow with distributed training capability. Non-essential features removed for better readability
 
 grpo.py 
-    grpo主程序
+    GRPO main program
 grpo_trainer.py
-    从0到1实现GRPO，参考了trl范式（forward/backward已跑通，开发中）
+    GRPO implementation from scratch, referencing trl paradigm (in development)
 reward_funcs.py
-    GRPO奖励函数库（开发中）
+    GRPO reward function library (in development)
 ```
 
-## 支持的数据集
-| 数据集名称     | 介绍               | 训练流程               |
+## Supported Datasets
+| Dataset Name     | Description               | Training Process               |
 | ---------------- | -------------------- | -------------------- |
-|[shibing624/sharegpt_gpt4](https://huggingface.co/datasets/shibing624/sharegpt_gpt4)| ShareGPT中挑选出的GPT4多轮问答数据，多语言问答。|sft               |
-|[deepctrl/deepctrl-sft-data](https://www.modelscope.cn/datasets/deepctrl/deepctrl-sft-data/summary)|匠数大模型SFT数据集是一个由匠数科技精心搜集整理的高质量数据集,包含10M条数据的中文数据集和包含2M条数据的英文数据集|sft               |
+|[shibing624/sharegpt_gpt4](https://huggingface.co/datasets/shibing624/sharegpt_gpt4)| Multi-round Q&A data selected from ShareGPT's GPT4 interactions, multilingual.|sft               |
+|[deepctrl/deepctrl-sft-data](https://www.modelscope.cn/datasets/deepctrl/deepctrl-sft-data/summary)|DeepCtrl SFT dataset is a high-quality dataset carefully curated by DeepCtrl Technology, including 10M Chinese data entries and 2M English data entries|sft               |
 |[open-thoughts/OpenThoughts-114k](https://huggingface.co/datasets/open-thoughts/OpenThoughts-114k)|Open synthetic reasoning dataset|grpo               |
 |[swulling/gsm8k_chinese](https://huggingface.co/datasets/swulling/gsm8k_chinese)|gsm8k chinese|grpo               |
 |[trl-lib/tldr](https://huggingface.co/datasets/trl-lib/tldr)|The TL;DR dataset is a processed version of Reddit posts, specifically curated to train models using the TRL library for summarization tasks.|grpo               |
-## 支持的模型
-| 模型名称     | 介绍               |
-| ---------------- | -------------------- |
-|[Qwen/Qwen2.5-0.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct)|Qwen2.5-0.5B-Instruct是一个基于Qwen2.5架构的模型，具有768个隐藏维度、12个注意力头和12个隐藏层。|
 
-## 环境配置
+## Supported Models
+| Model Name     | Description               |
+| ---------------- | -------------------- |
+|[Qwen/Qwen2.5-0.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct)|Qwen2.5-0.5B-Instruct is a model based on the Qwen2.5 architecture with 768 hidden dimensions, 12 attention heads, and 12 hidden layers.|
+
+## Environment Setup
 ```bash
 git clone https://github.com/XU-YIJIE/hobo-llm.git
 

@@ -121,7 +121,7 @@ def main():
     )
     
     # reward_funcs = [reward_json_format, reward_length]
-    reward_funcs = [partial(reward_punish_too_long, punish_length=200), reward_unbias]
+    reward_funcs = [partial(reward_punish_too_long, punish_length=100), reward_unbias]
     total_steps = 0
     for epoch in range(num_epochs):
         progress_bar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{num_epochs}", disable=not accelerator.is_local_main_process)
