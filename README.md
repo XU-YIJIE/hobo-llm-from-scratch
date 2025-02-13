@@ -1,4 +1,4 @@
-# Hobo-LLM: LLM from Zero to Hero
+# Hobo-LLM: From sft to grpo
 
 ![License](https://img.shields.io/badge/License-Apache%202.0-green)
 
