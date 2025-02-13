@@ -1,4 +1,4 @@
-# Hobo-LLM: From sft to grpo
+# Hobo-LLM: from sft to grpo
 
 ![License](https://img.shields.io/badge/License-Apache%202.0-green)
 
@@ -86,7 +86,7 @@ reward_funcs.py
 |[deepctrl/deepctrl-sft-data](https://www.modelscope.cn/datasets/deepctrl/deepctrl-sft-data/summary)|匠数大模型SFT数据集是一个由匠数科技精心搜集整理的高质量数据集,包含10M条数据的中文数据集和包含2M条数据的英文数据集|sft               |
 |[open-thoughts/OpenThoughts-114k](https://huggingface.co/datasets/open-thoughts/OpenThoughts-114k)|Open synthetic reasoning dataset|grpo               |
 |[swulling/gsm8k_chinese](https://huggingface.co/datasets/swulling/gsm8k_chinese)|gsm8k chinese|grpo               |
-|[trl-lib/tldr](https://huggingface.co/datasets/trl-lib/tldr)|gsm8k chinese|grpo               |
+|[trl-lib/tldr](https://huggingface.co/datasets/trl-lib/tldr)|The TL;DR dataset is a processed version of Reddit posts, specifically curated to train models using the TRL library for summarization tasks.|grpo               |
 ## 支持的模型
 | 模型名称     | 介绍               |
 | ---------------- | -------------------- |
