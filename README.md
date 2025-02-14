@@ -133,3 +133,12 @@ bash scripts/train_accelerate_sft.sh
 # grpo
 python grpo.py
 ```
+
+## TODO
+- [ ] Add MOE (Mixture of Experts) module to model architecture
+- [ ] Implement training with deepspeed pipemodule paradigm to achieve 2D parallelism (pp + dp)
+- [ ] Train a 0.5B chat model from scratch
+- [ ] Add model evaluation code to generate batch performance reports
+- [ ] Complete GRPO code and workflow, verify training accuracy, improve training process, add wandb logging, and implement accelerator support
+- [ ] Implement a more versatile dialogue-based LLM scorer that scores small model outputs through interactions with larger LLMs for more nuanced rewards
+- [ ] Add fluency penalty to GRPO

@@ -98,7 +98,6 @@ class GRPOTrainer:
         completion_ids: group_num * batch_size, completion_len
         """
         self.model.train()
-        self.model.gradient_checkpointing_enable()
         stats = []
         
         batch_size = prompt_ids.shape[0] // self.config.group_num
@@ -163,7 +162,6 @@ class GRPOTrainer:
         **generation_kwargs
     ):  
         self.model.eval()
-        self.model.gradient_checkpointing_disable()
         outputs = self.model.generate(
             input_ids=prompt_tensor,
             **generation_kwargs
