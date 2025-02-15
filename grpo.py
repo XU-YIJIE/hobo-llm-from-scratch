@@ -29,8 +29,6 @@ from typing import Dict, List, Any
 
 from datasets import load_dataset
 from data.aligner import convert_tldr
-from data.preprocess import preprocess_rl_dataset_v1
-from constants import IGNORE_INDEX
 
 os.environ["NCCL_P2P_DISABLE"] = "1"
 os.environ["NCCL_IB_DISABLE"] = "1"
