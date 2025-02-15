@@ -1,7 +1,11 @@
+from ast import List
+import shutil
+from pyparsing import Any
 import torch
 from transformers import (AutoTokenizer, 
                           AutoModelForCausalLM,
-                          get_linear_schedule_with_warmup)
+                          get_linear_schedule_with_warmup,
+                          PreTrainedTokenizer)
 from grpo_trainer import GRPOTrainer, GRPOConfig
 from reward_funcs import (reward_punish_too_long, 
                           reward_unbias, 
@@ -21,22 +25,37 @@ from tqdm import tqdm
 import datetime
 import wandb
 from datasets import Dataset
+from typing import Dict, List, Any
 
-from datasets import load_dataset
-from data.aligner import convert_tldr
-from data.preprocess import preprocess_rl_dataset_v1
-from constants import IGNORE_INDEX
+# from datasets import load_dataset
+# from data.aligner import convert_tldr
+# from data.preprocess import preprocess_rl_dataset_v1
+# from constants import IGNORE_INDEX
 
 os.environ["NCCL_P2P_DISABLE"] = "1"
 os.environ["NCCL_IB_DISABLE"] = "1"
+
+
+def preprocess_rl_dataset_v1(
+    examples: Dict[str, List[Any]], 
+    tokenizer: PreTrainedTokenizer,
+) -> Dict[str, List[List[int]]]:
+    model_inputs = {"prompt": [], "response":[]}
+    for i in range(len(examples["prompt"])):
+        prompt = examples["prompt"][i]
+        response = examples["response"][i]
+        input_str = tokenizer.apply_chat_template(prompt, template=tokenizer.chat_template, tokenize=False, add_generation_prompt=True)
+        model_inputs["prompt"].append(input_str)
+        model_inputs["response"].append(response[0]['content'])
+    return model_inputs
 
 
 def get_demo_data():
     data = {
         "prompt": [
             [
-                {'role': 'system', 'content': "你是一个彩虹屁夸夸机器人"},
-                {'role': 'user', 'content': "尝试用尽量浮夸的语气进行对话"}
+                {'role': 'system', 'content': "你是一个夸夸机器人"},
+                {'role': 'user', 'content': "尝试用尽量浮夸的语气夸我"}
             ]
         ],
         "response": [
@@ -51,20 +70,56 @@ def get_demo_data():
 
 
 def main():
-    model_name = "lm_models/Qwen2.5-0.5B-Instruct"  # 使用Qwen2.5-0.5B-Instruct作为基础模型
+    def save_manager(current_epoch, current_steps, current_avg_reward, max_save=None, prefix=None):
+        checkpoints_dir = f"checkpoints/{wandb_run_name}"
+        if not os.path.exists(checkpoints_dir):
+            os.makedirs(checkpoints_dir)
+        
+        if max_save is not None:
+            step_dirs = [d for d in os.listdir(checkpoints_dir) 
+                        if os.path.isdir(os.path.join(checkpoints_dir, d)) and d.startswith(prefix)]
+            step_dirs.sort(key=lambda x: os.path.getctime(os.path.join(checkpoints_dir, x)))
+            
+            while len(step_dirs) >= max_save:
+                oldest_dir = os.path.join(checkpoints_dir, step_dirs[0])
+                shutil.rmtree(oldest_dir)
+                step_dirs.pop(0)
+        
+        save_dir = os.path.join(checkpoints_dir, f"{prefix}_{current_steps}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}")
+        os.makedirs(save_dir, exist_ok=True)
+        
+        unwrapped_model = accelerator.unwrap_model(model)
+        unwrapped_model.save_pretrained(save_dir)
+        tokenizer.save_pretrained(save_dir)
+        
+        training_state = {
+            'step': current_steps,
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': lr_scheduler.state_dict(),
+            'reward': current_avg_reward,
+            'epoch': current_epoch,
+        }
+        torch.save(training_state, os.path.join(save_dir, "training_state.pt"))        
+        
+        
+    model_name_or_path = "lm_models/Qwen2.5-0.5B-Instruct"  # 使用Qwen2.5-0.5B-Instruct作为基础模型
     dataset_dir = "dataset/tldr"
     
     learning_rate = 1e-6
-    group_num = 10
+    group_num = 8
     mini_batch_size = 1
     batch_size = 4  # 每个global_steps更新 batch_size / mini_batch_size 次
     gradient_accumulation_steps = 1
     # 每 gradient_accumulation_steps / (batch_size / mini_batch_size) 个global_steps反向传播一次
-    num_epochs = 10
+    num_epochs = 300
     log_steps = 1
-    
+    save_steps = 10
+
     max_grad_norm = 1
     seed = 1024
+    max_save = 3
+    
+    resume = False
     
     # wandb
     wandb_project = "grpo_training"
@@ -96,7 +151,7 @@ def main():
             name=wandb_run_name,
             dir=wandb_dir,
             config={
-                "model_name": model_name,
+                "model_name_or_path": model_name_or_path,
                 "dataset": dataset_dir,
                 "batch_size": batch_size,
                 "mini_batch_size": mini_batch_size,
@@ -112,24 +167,24 @@ def main():
         logger.info(f"Wandb local dir: {wandb_dir}")
     
     # model
-    model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True)
+    model = AutoModelForCausalLM.from_pretrained(model_name_or_path, trust_remote_code=True)
     model.gradient_checkpointing_enable()
     # 注意padding区分left/right
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True, padding_side="left")
+    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=True, padding_side="left")
     
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
-    ref_model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True).cpu()
+    ref_model = AutoModelForCausalLM.from_pretrained(model_name_or_path, trust_remote_code=True).cpu()
     for param in ref_model.parameters():
         param.requires_grad = False
         
-    # dataprocess
-    dataset = load_dataset(path=dataset_dir, split="train")
-    # dataset = dataset.select(range(100))
-    dataset = convert_tldr(dataset)
+    # # dataprocess
+    # dataset = load_dataset(path=dataset_dir, split="train")
+    # # dataset = dataset.select(range(100))
+    # dataset = convert_tldr(dataset)
     
-    # dataset = get_demo_data()
+    dataset = get_demo_data()
     
     column_names = list(next(iter(dataset)).keys())
     preprocess_func = partial(
@@ -146,11 +201,27 @@ def main():
         )
     dataloader = DataLoader(dataset, batch_size=batch_size)
     
-    # optimizer
+    # optimizer & lr_scheduler
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     num_training_steps = num_epochs * len(dataloader) * (batch_size // mini_batch_size) // gradient_accumulation_steps
     lr_scheduler = get_linear_schedule_with_warmup(optimizer=optimizer, num_warmup_steps=0, num_training_steps=num_training_steps)
     
+    # resume training state from checkpoint
+    if resume:
+        training_state = torch.load(os.path.join(model_name_or_path, "training_state.pt"), map_location="cpu" )
+        optimizer.load_state_dict(training_state['optimizer_state_dict'])
+        lr_scheduler.load_state_dict(training_state['scheduler_state_dict'])
+        
+        start_epoch = training_state['epoch']
+        total_steps_count = training_state['step']
+        best_reward = training_state['reward']
+        logger.info(f"Resuming from epoch {start_epoch}, step {total_steps_count}")
+    else:
+        start_epoch = 0
+        total_steps_count = 0
+        best_reward = float('-inf')
+    
+
     model, optimizer, dataloader, lr_scheduler, ref_model = accelerator.prepare(
         model, optimizer, dataloader, lr_scheduler, ref_model)
     
@@ -164,21 +235,22 @@ def main():
         accelerator=accelerator,
     )
     
+    # define reward funcs
     perplexity_reward_func = partial(perplexity_reward, model=ref_model, tokenizer=tokenizer)
     perplexity_reward_func.__name__ = "perplexity_reward"
     reward_funcs = [
                     perplexity_reward_func, 
-                    # llm_rater_reward, 
+                    llm_rater_reward, 
                     repetition_reward, 
                     length_reward, 
-                    # chinese_char_ratio_reward
+                    chinese_char_ratio_reward
                 ]
     
-    total_steps_count = 0
     max_train_steps = num_epochs * len(dataloader)
-    
     progress_bar = tqdm(range(max_train_steps), desc="Training Steps", disable=not accelerator.is_local_main_process)
-    for epoch in range(num_epochs):
+    progress_bar.update(total_steps_count)  # 更新进度条到恢复的步数
+    
+    for epoch in range(start_epoch, num_epochs):
         metrics = {}
         for step, batch in enumerate(dataloader):
             prompts = batch["prompt"]
@@ -259,9 +331,13 @@ def main():
                     "train/avg_reward_score": avg_reward_score,
                 })
                 wandb.log(metrics, step=total_steps_count)
-            
-        # model.save_pretrained(f"json_model_epoch_{epoch+1}")
-        
+
+                if avg_reward_score > best_reward and total_steps_count % save_steps == 0:
+                    best_reward = avg_reward_score
+                    metrics["best_reward"] = best_reward
+                    save_manager(epoch + 1, total_steps_count, avg_reward_score, max_save=max_save, prefix="step")
+    
+    
 
 if __name__ == "__main__":
     main()

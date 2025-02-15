@@ -61,7 +61,6 @@ def think_mark_num(text):
     return reward
 
 def request_ollama(prompt: str, model: str = "qwen2.5:7b") -> str:
-    """单次请求"""
     response = requests.post(
         "http://localhost:11434/api/generate",
         json={

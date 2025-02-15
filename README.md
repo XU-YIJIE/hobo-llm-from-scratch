@@ -35,9 +35,6 @@ Uses qwen2.5's tokenizer and vocab.json
 
 ### 2. Multi-node Multi-GPU Training Support with DeepSpeed
     
-Add configuration in accelerate config:
-    deepspeed_hostfile: ./configs/hostfile
-
 Configure LAN IP nodes in the hostfile to enable multi-node multi-GPU training based on deepspeed
 
 2D parallelism (dp + pp) implementation based on deepspeed.pipe. PipelineModule is under development...
@@ -106,7 +103,7 @@ conda create -n hobo-llm python=3.10
 pip install -r requirements.txt
 ```
 
-### sft
+### SFT
 
 ```bash
 # sft
@@ -128,17 +125,17 @@ python sft_accelerator.py \
 bash scripts/train_accelerate_sft.sh
 ```
 
-### grpo
-```bash
-# grpo
-python grpo.py
+### GRPO
+
 ```
+# launch your grpo training
+accelerate launch grpo.py
+```
+[如何0样本训练一个夸夸机器人](https://github.com/XU-YIJIE/grpo-flat)
+
 
 ## TODO
-- [ ] Add MOE (Mixture of Experts) module to model architecture
+- [ ] Implement MOE/MLA
 - [ ] Implement training with deepspeed pipemodule paradigm to achieve 2D parallelism (pp + dp)
 - [ ] Train a 0.5B chat model from scratch
 - [ ] Add model evaluation code to generate batch performance reports
-- [ ] Complete GRPO code and workflow, verify training accuracy, improve training process, add wandb logging, and implement accelerator support
-- [ ] Implement a more versatile dialogue-based LLM scorer that scores small model outputs through interactions with larger LLMs for more nuanced rewards
-- [ ] Add fluency penalty to GRPO
