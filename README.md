@@ -128,7 +128,7 @@ bash scripts/train_accelerate_sft.sh
 ### GRPO
 
 ```
-# launch your grpo training
+# launch GRPO training with tldr dataset. Make summarization outputs length close to a wanted value 
 accelerate launch grpo.py
 ```
 [如何0样本训练一个夸夸机器人](https://github.com/XU-YIJIE/grpo-flat)

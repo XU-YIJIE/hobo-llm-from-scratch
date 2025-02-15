@@ -27,10 +27,10 @@ import wandb
 from datasets import Dataset
 from typing import Dict, List, Any
 
-# from datasets import load_dataset
-# from data.aligner import convert_tldr
-# from data.preprocess import preprocess_rl_dataset_v1
-# from constants import IGNORE_INDEX
+from datasets import load_dataset
+from data.aligner import convert_tldr
+from data.preprocess import preprocess_rl_dataset_v1
+from constants import IGNORE_INDEX
 
 os.environ["NCCL_P2P_DISABLE"] = "1"
 os.environ["NCCL_IB_DISABLE"] = "1"
@@ -179,12 +179,12 @@ def main():
     for param in ref_model.parameters():
         param.requires_grad = False
         
-    # # dataprocess
-    # dataset = load_dataset(path=dataset_dir, split="train")
-    # # dataset = dataset.select(range(100))
-    # dataset = convert_tldr(dataset)
+    # dataprocess
+    dataset = load_dataset(path=dataset_dir, split="train")
+    # dataset = dataset.select(range(100))
+    dataset = convert_tldr(dataset)
     
-    dataset = get_demo_data()
+    # dataset = get_demo_data()
     
     column_names = list(next(iter(dataset)).keys())
     preprocess_func = partial(
@@ -240,10 +240,10 @@ def main():
     perplexity_reward_func.__name__ = "perplexity_reward"
     reward_funcs = [
                     perplexity_reward_func, 
-                    llm_rater_reward, 
+                    # llm_rater_reward, 
                     repetition_reward, 
                     length_reward, 
-                    chinese_char_ratio_reward
+                    # chinese_char_ratio_reward
                 ]
     
     max_train_steps = num_epochs * len(dataloader)
