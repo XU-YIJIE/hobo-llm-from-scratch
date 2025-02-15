@@ -98,17 +98,14 @@ class GRPOTrainer:
         completion_ids: group_num * batch_size, completion_len
         """
         self.model.train()
-        stats = []
         
         batch_size = prompt_ids.shape[0] // self.config.group_num
         completions_mask = completion_ids != self.tokenizer.pad_token_id
         advantages = self.grpo_advantage(reward_scores)  # (group_num * batch_size)
         
-        with torch.no_grad():
-            # 打断梯度
-            old_logprobs = self.get_all_logprobs(self.model, prompt_ids, completion_ids)  
-            # (group_num * batch_size, completion_len)
-            ref_logprobs = self.get_all_logprobs(self.ref_model, prompt_ids, completion_ids)  
+        old_logprobs = self.get_all_logprobs(self.model, prompt_ids, completion_ids)  
+        # (group_num * batch_size, completion_len)
+        ref_logprobs = self.get_all_logprobs(self.ref_model, prompt_ids, completion_ids)  
 
         batch_indice = torch.arange(batch_size)
         for mini_batch_start in range(0, batch_size, self.config.mini_batch_size):
@@ -122,48 +119,40 @@ class GRPOTrainer:
             mini_prompt_ids, mini_completion_ids, mini_old_logprobs, mini_ref_logprobs, mini_completions_mask, mini_advantages = prompt_ids[mini_batch_inds], completion_ids[mini_batch_inds], old_logprobs[mini_batch_inds], ref_logprobs[mini_batch_inds], completions_mask[mini_batch_inds], advantages[mini_batch_inds]  # mini_old_logprobs: group_num * mini_batch_size, completion_len
             
             with self.accelerator.accumulate(self.model):
-                new_logprobs = self.get_all_logprobs(
-                    self.model,
-                    mini_prompt_ids,
-                    mini_completion_ids,
-                )
+                new_logprobs = self.get_all_logprobs(self.model, mini_prompt_ids, mini_completion_ids)
                 del mini_prompt_ids, mini_completion_ids
                 
-                ratio = torch.exp(new_logprobs - mini_old_logprobs)
+                ratio = torch.exp(new_logprobs - mini_old_logprobs.detach())
                 del mini_old_logprobs
                 
                 ratio_clip = torch.clamp(ratio, 1 - self.config.cliprange, 1 + self.config.cliprange)
-                
-                pg_loss = - torch.min(mini_advantages.unsqueeze(dim=1) * ratio, mini_advantages.unsqueeze(dim=1) * ratio_clip)
+                pg_loss = torch.min(mini_advantages.unsqueeze(dim=1) * ratio, mini_advantages.unsqueeze(dim=1) * ratio_clip)
+                # pg_loss = mini_advantages.unsqueeze(dim=1) * ratio
                 del mini_advantages
                 
                 unbiased_kl = torch.exp(mini_ref_logprobs - new_logprobs) - (mini_ref_logprobs - new_logprobs) - 1
                 
-                pg_loss = pg_loss + self.config.beta * unbiased_kl
+                pg_loss = - pg_loss + self.config.beta * unbiased_kl
                 loss = ((pg_loss * mini_completions_mask).sum(dim=1) / mini_completions_mask.sum(dim=1)).mean()
                 del mini_completions_mask, unbiased_kl
                 
-                # print(loss.detach().float().cpu())
-                
                 self.accelerator.backward(loss)
                 if self.config.max_grad_norm is not None:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(),
-                                                   self.config.max_grad_norm)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.max_grad_norm)
                     
                 self.optimizer.step()
                 self.lr_scheduler.step()
                 self.optimizer.zero_grad()
                 
-        return stats
-
     def generate(
         self,
         prompt_tensor: Union[torch.Tensor],
         **generation_kwargs
     ):  
-        self.model.eval()
-        outputs = self.model.generate(
+        unwrapped_model = self.accelerator.unwrap_model(self.model).eval()
+        outputs = unwrapped_model.generate(
             input_ids=prompt_tensor,
             **generation_kwargs
         )
+        del unwrapped_model
         return outputs

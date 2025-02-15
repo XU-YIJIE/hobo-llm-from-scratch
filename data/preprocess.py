@@ -89,14 +89,13 @@ def preprocess_rl_dataset_v1(
     examples: Dict[str, List[Any]],
     tokenizer: PreTrainedTokenizer,
 ) -> Dict[str, List[List[int]]]:
-    model_inputs = {"prompts": [], "responses":[]}
-    for i in range(len(examples["_prompt"])):
-        system = examples["_system"][i]
-        prompt = examples["_prompt"][i]
-        response = examples["_response"][i]
-        input_str = tokenizer.apply_chat_template([system] + prompt, template=tokenizer.chat_template, tokenize=False, add_generation_prompt=True)
-        model_inputs["prompts"].append(input_str)
-        model_inputs["responses"].append(response[0]['content'])
+    model_inputs = {"prompt": [], "response":[]}
+    for i in range(len(examples["prompt"])):
+        prompt = examples["prompt"][i]
+        response = examples["response"][i]
+        input_str = tokenizer.apply_chat_template(prompt, template=tokenizer.chat_template, tokenize=False, add_generation_prompt=True)
+        model_inputs["prompt"].append(input_str)
+        model_inputs["response"].append(response[0]['content'])
     return model_inputs
 
 

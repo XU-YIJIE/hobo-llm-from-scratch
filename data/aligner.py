@@ -262,13 +262,12 @@ def convert_tldr(dataset: Dataset):
     system_prompt = '''You are a summarization assistant. When you see a Reddit post after the "SUBREDDIT:" identifier, provide a concise summary of the post content. Output only the summary without any additional text, explanations, or meta-commentary. Focus on capturing the main points and key information from the post in a clear and direct manner.'''
     converted_data = []
     for item in dataset:
-        system = {"role": "system", "content": system_prompt}
-        prompt = [{"role": "user", "content": item["prompt"].strip(" TL;DR:")}]
+        prompt = [{"role": "system", "content": system_prompt},
+                  {"role": "user", "content": item["prompt"].strip(" TL;DR:")}]
         response = [{"role": "assistant", "content": item["completion"]}]
         converted_item = {
-            "_system": system,
-            "_prompt": prompt,
-            "_response": response
+            "prompt": prompt,
+            "response": response
         }
         converted_data.append(converted_item)
     dataset = Dataset.from_list(converted_data)
