@@ -42,6 +42,7 @@ Configure LAN IP nodes in the hostfile to enable multi-node multi-GPU training b
 ### 3. GRPO Implementation
 
 GRPO training with tldr dataset. Make summarization outputs length close to a wanted value
+
 [如何0样本训练一个夸夸机器人](https://github.com/XU-YIJIE/grpo-flat)
 
 
