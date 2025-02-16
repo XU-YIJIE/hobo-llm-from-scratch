@@ -35,15 +35,17 @@ Uses qwen2.5's tokenizer and vocab.json
 
 ### 2. Multi-node Multi-GPU Training Support with DeepSpeed
     
-Configure LAN IP nodes in the hostfile to enable multi-node multi-GPU training based on deepspeed
+- Configure LAN IP nodes in the hostfile to enable multi-node multi-GPU training based on deepspeed
 
-2D parallelism (dp + pp) implementation based on deepspeed.pipe. PipelineModule is under development...
+- 2D parallelism (dp + pp) implementation based on deepspeed.pipe. PipelineModule is under development...
 
 ### 3. GRPO Implementation
 
-GRPO training with tldr dataset. Make summarization outputs length close to a wanted value
+Controllable text generation training based on GRPO (Grouped Reward Policy Optimization):
 
-[如何0样本基于grpo训练一个夸夸机器人](https://github.com/XU-YIJIE/grpo-flat)
+- Summary length control: Using TLDR dataset to train models to generate summaries of specified length
+- Zero-shot transfer training: [如何0样本基于grpo训练一个夸夸机器人](https://github.com/XU-YIJIE/grpo-flat)
+
 
 
 ## Project Structure
@@ -61,23 +63,17 @@ Hobo-LLM/
 ├── grpo.py            # GRPO main program (in development)
 ├── grpo_trainer.py    # GRPO trainer implementation (in development)
 └── reward_funcs.py   # GRPO reward function library (in development)
-
-pt.py              
-    Complete pretrain workflow
-sft_accelerator.py 
-    Most comprehensive, integrates DeepSpeed distributed training, 8-bit quantization training, amp mixed precision training, wandb real-time metrics and generation effect tracking
-sft_amp.py 
-    Refactored from vanilla, integrates amp mixed precision training, 8-bit quantization training
-sft_vanilla.py
-    Flat sft workflow with distributed training capability. Non-essential features removed for better readability
-
-grpo.py 
-    GRPO main program
-grpo_trainer.py
-    GRPO implementation from scratch, referencing trl paradigm (in development)
-reward_funcs.py
-    GRPO reward function library (in development)
 ```
+
+| File Name | Description |
+|--------|----------|
+| pt.py | Complete pre-training workflow |
+| sft_accelerator.py | Most comprehensive implementation, integrating DeepSpeed distributed training, 8-bit quantization training, amp mixed precision training, and wandb real-time metrics and generation effect tracking |
+| sft_amp.py | Refactored from vanilla, integrating amp mixed precision training and 8-bit quantization training |
+| sft_vanilla.py | Concise SFT workflow with distributed training capability. Non-essential features removed to improve readability |
+| grpo.py | GRPO main program |
+| grpo_trainer.py | GRPO implementation from scratch |
+| reward_funcs.py | GRPO reward function library |
 
 ## Supported Datasets
 | Dataset Name     | Description               | Training Process               |
