@@ -79,7 +79,7 @@ class Trainer:
         self.max_grad_norm = args.max_grad_norm
         
         self.weight_decay = args.weight_decay
-        self.warmup_steps = args.warmup_steps
+        self.num_warmup_steps = args.num_warmup_steps
         self.adam_beta1 = args.adam_beta1
         self.adam_beta2 = args.adam_beta2
         self.adam_epsilon = args.adam_epsilon

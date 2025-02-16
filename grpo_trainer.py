@@ -150,9 +150,10 @@ class GRPOTrainer:
         **generation_kwargs
     ):  
         unwrapped_model = self.accelerator.unwrap_model(self.model).eval()
-        outputs = unwrapped_model.generate(
-            input_ids=prompt_tensor,
-            **generation_kwargs
-        )
+        with torch.inference_mode():
+            outputs = unwrapped_model.generate(
+                input_ids=prompt_tensor,
+                **generation_kwargs
+            )
         del unwrapped_model
         return outputs

@@ -29,6 +29,7 @@ def parse_args():
     parser.add_argument("--max_grad_norm", type=float, default=1.0, help="max_grad_norm")
     parser.add_argument("--learning_rate", type=float, default=1e-4, help="learning_rate")
     parser.add_argument("--seed", type=int, default=1024, help="transformer_random_seed")
+    parser.add_argument("--resume", type=bool, default=False, help="resume training")
     
     # peft
     parser.add_argument("--use_peft", type=bool, default=False, help="if to use peft")
@@ -39,8 +40,12 @@ def parse_args():
     parser.add_argument("--modules_to_save", type=str, default="lm_head", help="List of modules apart from LoRA layers to be set as trainable and saved in the final checkpoint. ")
     parser.add_argument("--qlora", type=bool, default=False, help="if to use qlora")
     
+    # grpo
+    parser.add_argument("--group_num", type=int, default=8, help="group_num")
+    parser.add_argument("--mini_batch_size", type=int, default=1, help="mini_batch_size")
+    
     # optimizer 
-    parser.add_argument("--warmup_steps", type=int, default=0, help="learning rate warmup steps")
+    parser.add_argument("--num_warmup_steps", type=int, default=0, help="learning rate warmup steps")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="optimizer weight decay")
     parser.add_argument("--adam_beta1", type=float, default=0.9, help="adam beta1")
     parser.add_argument("--adam_beta2", type=float, default=0.999, help="adam beta2")

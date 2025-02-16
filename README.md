@@ -4,7 +4,7 @@
 
 Implementation of LLM training code (pt/sft/grpo) from scratch. Focused on balancing educational value and practicality, suitable for small to medium-scale training scenarios, supporting multi-node multi-GPU training. Minimizes third-party library dependencies to enhance readability while ensuring versatility.
 
-## Highlights
+## Features
 
 ### 1. Llama2-like Architecture Model Implemented from Scratch
 Model structure details in modeling_hobo.py
@@ -45,6 +45,16 @@ Controllable text generation training based on GRPO (Grouped Reward Policy Optim
 
 - Summary length control: Using TLDR dataset to train models to generate summaries of specified length
 - Zero-shot transfer training: [如何0样本基于grpo训练一个夸夸机器人，单卡24GB显存耗时15分钟](https://github.com/XU-YIJIE/grpo-flat)
+
+
+## News
+
+[2024/02/16]  grpo 重构，采用和sft_accelerator.py一致的代码范式
+
+[2024/02/15]  grpo [0样本消费级单卡15分钟训练一个夸夸机器人](https://github.com/XU-YIJIE/grpo-flat)
+
+[2024/02/13]  实现grpo基于[tl;dr](https://huggingface.co/datasets/trl-lib/tldr)数据集训练，支持基于length_reward调整摘要模型输出长度
+
 
 ## Project Structure
 
@@ -124,7 +134,22 @@ bash scripts/train_accelerate_sft.sh
 ### GRPO
 
 ```bash
-accelerate launch grpo.py
+# launch grpo training
+accelerate launch grpo.py \
+    --model_name_or_path "lm_models/Qwen2.5-0.5B-Instruct" \
+    --dataset_dir "dataset/tldr" \
+    --learning_rate 1e-6 \
+    --resume False \
+    --batch_size 4 \
+    --mini_batch_size 1 \
+    --gradient_accumulation_steps 1 \
+    --num_epochs 2 \
+    --group_num 8 \
+    --max_grad_norm 1 \
+    --log_steps 1 \
+    --save_steps 10 \
+    --max_save 3 \
+    --wandb_project "grpo_training"
 ```
 
 

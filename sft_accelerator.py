@@ -101,6 +101,7 @@ class Trainer:
         self.num_epochs = args.num_epochs
         self.batch_size = args.batch_size
         self.learning_rate = args.learning_rate
+        self.num_warmup_steps = args.num_warmup_steps
         self.gradient_accumulation_steps = args.gradient_accumulation_steps
         self.max_grad_norm = args.max_grad_norm
         self.log_steps = args.log_steps
@@ -287,7 +288,7 @@ class Trainer:
         max_train_steps = self.num_epochs * num_update_steps_per_epoch
         self.lr_scheduler = get_linear_schedule_with_warmup(
             optimizer=self.optimizer,
-            num_warmup_steps=0,
+            num_warmup_steps=self.num_warmup_steps,
             num_training_steps=max_train_steps,
         )
 
