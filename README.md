@@ -136,9 +136,19 @@ accelerate launch grpo.py
 
 
 ## Acknowledgements
-
 - [shibing624/MedicalGPT](https://github.com/shibing624/MedicalGPT)
 - [jingyaogong/minimind](https://github.com/jingyaogong/minimind)
 - [hiyouga/LLaMA-Factory](https://github.com/hiyouga/LLaMA-Factory)
 - [huggingface/trl](https://github.com/huggingface/trl)
 
+
+## Citation
+```bibtex
+@software{hobo_llm2024,
+    title = {Hobo-LLM: From SFT to GRPO},
+    author = {XU-YIJIE},
+    year = {2024},
+    publisher = {GitHub},
+    url = {https://github.com/XU-YIJIE/hobo-llm}
+}
+```
