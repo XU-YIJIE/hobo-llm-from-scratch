@@ -49,11 +49,11 @@ Controllable text generation training based on GRPO (Grouped Reward Policy Optim
 
 ## News
 
-[2024/02/16]  grpo 重构，采用和sft_accelerator.py一致的代码范式
+[2024/02/16]  GRPO refactored, adopting the same code paradigm as sft_accelerator.py
 
-[2024/02/15]  grpo [0样本消费级单卡15分钟训练一个夸夸机器人](https://github.com/XU-YIJIE/grpo-flat)
+[2024/02/15]  GRPO [如何0样本基于grpo训练一个夸夸机器人，单卡24GB显存耗时15分钟](https://github.com/XU-YIJIE/grpo-flat)
 
-[2024/02/13]  实现grpo基于[tl;dr](https://huggingface.co/datasets/trl-lib/tldr)数据集训练，支持基于length_reward调整摘要模型输出长度
+[2024/02/13]  Implemented GRPO training based on [tl;dr](https://huggingface.co/datasets/trl-lib/tldr) dataset, supporting summary length adjustment via length_reward
 
 
 ## Project Structure
