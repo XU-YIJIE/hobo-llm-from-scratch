@@ -260,6 +260,7 @@ def convert_deepctrl(dataset: Dataset):
 
 def convert_tldr(dataset: Dataset):
     system_prompt = '''You are a summarization assistant. When you see a Reddit post after the "SUBREDDIT:" identifier, provide a concise summary of the post content. Output only the summary without any additional text, explanations, or meta-commentary. Focus on capturing the main points and key information from the post in a clear and direct manner.'''
+    # system_prompt = '''You are a summarization assistant. When you see a Reddit post after the "SUBREDDIT:" identifier, provide a concise summary of the post content. Output only the summary without any additional text, explanations, or meta-commentary. Focus on capturing the main points and key information from the post in a clear and direct manner. Use chinese to summarize'''
     converted_data = []
     for item in dataset:
         prompt = [{"role": "system", "content": system_prompt},

@@ -354,8 +354,9 @@ class Trainer:
         perplexity_reward_func.__name__ = "perplexity_reward"
         reward_funcs = [
             perplexity_reward_func,
-            # repetition_reward,
+            repetition_reward,
             length_reward,
+            # chinese_char_ratio_reward
         ]
         
         max_train_steps = self.num_epochs * len(self.train_dataloader)
@@ -432,6 +433,7 @@ class Trainer:
                 progress_bar.set_postfix({
                     'avg_reward_score': f"{avg_reward_score:.3f}",
                     'lr': f"{current_lr:.5e}",
+                    'epoch': f"{epoch + (step + 1) / len(self.train_dataloader):.3f}",
                 })
                 
                 # Logging
@@ -488,9 +490,9 @@ if __name__ == "__main__":
     args.dataset_dir = "dataset/tldr"
     args.learning_rate = 1e-6
     args.resume = False
-    args.batch_size = 4
+    args.batch_size = 2
     args.gradient_accumulation_steps = 1
-    args.num_epochs = 300
+    args.num_epochs = 2
     args.log_steps = 1
     args.save_steps = 10
     args.max_grad_norm = 1
