@@ -44,9 +44,7 @@ Uses qwen2.5's tokenizer and vocab.json
 Controllable text generation training based on GRPO (Grouped Reward Policy Optimization):
 
 - Summary length control: Using TLDR dataset to train models to generate summaries of specified length
-- Zero-shot transfer training: [如何0样本基于grpo训练一个夸夸机器人](https://github.com/XU-YIJIE/grpo-flat)
-
-
+- Zero-shot transfer training: [如何0样本基于grpo训练一个夸夸机器人，单卡24GB显存耗时15分钟](https://github.com/XU-YIJIE/grpo-flat)
 
 ## Project Structure
 
@@ -135,3 +133,12 @@ accelerate launch grpo.py
 - [ ] Implement training with deepspeed pipemodule paradigm to achieve 2D parallelism (pp + dp)
 - [ ] Train a 0.5B chat model from scratch
 - [ ] Add model evaluation code to generate batch performance reports
+
+
+## Acknowledgements
+
+- [shibing624/MedicalGPT](https://github.com/shibing624/MedicalGPT)
+- [jingyaogong/minimind](https://github.com/jingyaogong/minimind)
+- [hiyouga/LLaMA-Factory](https://github.com/hiyouga/LLaMA-Factory)
+- [huggingface/trl](https://github.com/huggingface/trl)
+
