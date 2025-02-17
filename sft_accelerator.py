@@ -54,7 +54,6 @@ os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 os.environ["NCCL_P2P_DISABLE"] = "1"
 os.environ["NCCL_IB_DISABLE"] = "1"  # Using RTX 4000 series doesn't support faster communication broadband via P2P or IB
 
-args = parse_args()
 
 def find_all_linear_names(peft_model, int4=False, int8=False):
     """Find all linear layer names in the model. reference from qlora paper."""
@@ -205,7 +204,6 @@ class Trainer:
                 flash_attn=False,
                 rope_theta=10000,
                 torch_dtype=self.torch_dtype,
-                quantization_config=quantization_config
             )
             if quantization_config:
                 config.quantization_config = quantization_config
