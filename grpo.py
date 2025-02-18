@@ -484,31 +484,31 @@ class Trainer:
 if __name__ == "__main__":
     args = parse_args()
     
-    # Override some arguments for GRPO training
-    args.model_name_or_path = "lm_models/Qwen2.5-0.5B-Instruct"
-    args.dataset_dir = "dataset/tldr"
-    args.learning_rate = 1e-6
-    args.resume = False
-    args.batch_size = 2
-    args.gradient_accumulation_steps = 1
-    args.num_epochs = 2
-    args.log_steps = 1
-    args.save_steps = 10
-    args.max_grad_norm = 1
-    args.max_save = 3
-    args.wandb_project = "grpo_training"
+    # # Override some arguments for GRPO training
+    # args.model_name_or_path = "lm_models/Qwen2.5-0.5B-Instruct"
+    # args.dataset_dir = "dataset/tldr"
+    # args.learning_rate = 1e-6
+    # args.resume = False
+    # args.batch_size = 2
+    # args.gradient_accumulation_steps = 1
+    # args.num_epochs = 2
+    # args.log_steps = 1
+    # args.save_steps = 10
+    # args.max_grad_norm = 1
+    # args.max_save = 3
+    # args.wandb_project = "grpo_training"
     
-    args.group_num = 8
-    args.mini_batch_size = 1
+    # args.group_num = 8
+    # args.mini_batch_size = 1
     
-    args.use_peft = True
-    args.lora_rank = 16
-    args.lora_alpha = 16
-    args.lora_dropout = 0.1
-    args.use_8bit = True
-    # args.use_4bit = True
-    # args.qlora = True
-    args.target_modules = "q_proj,v_proj,lm_head"
+    # args.use_peft = True
+    # args.lora_rank = 16
+    # args.lora_alpha = 16
+    # args.lora_dropout = 0.1
+    # args.use_8bit = True
+    # # args.use_4bit = True
+    # # args.qlora = True
+    # args.target_modules = "q_proj,v_proj,lm_head"
     
     trainer = Trainer(args)
     trainer.train()

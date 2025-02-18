@@ -579,13 +579,13 @@ class Trainer:
 
 if __name__ == "__main__":
     args = parse_args()
-    args.from_scratch = True
-    args.eval_steps = 4000
-    # args.save_steps = 100
-    # args.batch_size = 10
+    # args.from_scratch = True
+    # args.eval_steps = 4000
+    # # args.save_steps = 100
+    # # args.batch_size = 10
     
-    # args.use_4bit = True
-    # args.use_8bit = True
-    args.wandb_project = "pt_training"
+    # # args.use_4bit = True
+    # # args.use_8bit = True
+    # args.wandb_project = "pt_training"
     trainer = Trainer(args)
     trainer.train()
