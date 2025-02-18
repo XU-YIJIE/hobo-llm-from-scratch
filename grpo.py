@@ -245,7 +245,7 @@ class Trainer:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         
         # Reference model
-        self.ref_model = AutoModelForCausalLM.from_pretrained(**kwargs).cpu()
+        self.ref_model = AutoModelForCausalLM.from_pretrained(**kwargs)
         for param in self.ref_model.parameters():
             param.requires_grad = False
         
@@ -502,5 +502,14 @@ if __name__ == "__main__":
     args.group_num = 8
     args.mini_batch_size = 1
     
+    args.use_peft = True
+    args.lora_rank = 16
+    args.lora_alpha = 16
+    args.lora_dropout = 0.1
+    args.use_8bit = True
+    # args.use_4bit = True
+    # args.qlora = True
+    args.target_modules = "q_proj,v_proj,lm_head"
+    
     trainer = Trainer(args)
-    trainer.train() 
+    trainer.train()
