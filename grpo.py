@@ -204,7 +204,6 @@ class Trainer:
         kwargs = {
             "pretrained_model_name_or_path": self.model_name_or_path,
             "trust_remote_code": True,
-            # "torch_dtype": self.torch_dtype,
             "low_cpu_mem_usage": True,
         }
         if quantization_config:

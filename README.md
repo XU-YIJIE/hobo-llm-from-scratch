@@ -2,7 +2,18 @@
 
 ![License](https://img.shields.io/badge/License-Apache%202.0-green)
 
-Implementation of LLM training code (pt/sft/grpo) from scratch. Focused on balancing educational value and practicality, suitable for small to medium-scale training scenarios, supporting multi-node multi-GPU training. Minimizes third-party library dependencies to enhance readability while ensuring versatility.
+从0到1实现 pt/sft/grpo，适配中小型场景的多机多卡训练。保证可读性和教学性的同时，最小化第三方库依赖
+
+## News
+[2024/02/18]  GRPO supports 8bit/4bit quantized training, supports lora/qlora
+
+[2024/02/17]  Implemented trainable tokenizer 
+
+[2024/02/16]  GRPO refactored, adopting the same code paradigm as sft_accelerator.py
+
+[2024/02/15]  GRPO [如何0样本基于grpo训练一个夸夸机器人，单卡24GB显存耗时15分钟](https://github.com/XU-YIJIE/grpo-flat)
+
+[2024/02/13]  Implemented GRPO training based on [tl;dr](https://huggingface.co/datasets/trl-lib/tldr) dataset, supporting summary length adjustment via length_reward
 
 ## Features
 
@@ -47,15 +58,6 @@ Controllable text generation training based on GRPO (Grouped Reward Policy Optim
 - Zero-shot transfer training: [如何0样本基于grpo训练一个夸夸机器人，单卡24GB显存耗时15分钟](https://github.com/XU-YIJIE/grpo-flat)
 
 
-## News
-
-[2024/02/16]  GRPO refactored, adopting the same code paradigm as sft_accelerator.py
-
-[2024/02/15]  GRPO [如何0样本基于grpo训练一个夸夸机器人，单卡24GB显存耗时15分钟](https://github.com/XU-YIJIE/grpo-flat)
-
-[2024/02/13]  Implemented GRPO training based on [tl;dr](https://huggingface.co/datasets/trl-lib/tldr) dataset, supporting summary length adjustment via length_reward
-
-
 ## Project Structure
 
 ```
@@ -64,6 +66,7 @@ Hobo-LLM/
 ├── data/                  # Data preprocessing (based on LlamaFactory)
 ├── scripts/              # shell scripts
 ├── modeling_hobo.py      # HoboGPT model architecture definition
+├── train_tokenizer.py    # trainable tokenizer
 ├── pt.py                # Pre-training main program
 ├── sft_accelerator.py   # Complete SFT implementation (DeepSpeed/8-bit/AMP)
 ├── sft_amp.py          # SFT with mixed precision training (AMP/8-bit)
@@ -75,13 +78,13 @@ Hobo-LLM/
 
 | File Name | Description |
 |--------|----------|
+| grpo.py | GRPO training main program with lora/qlora support |
+| grpo_trainer.py | GRPO trainer implementation from scratch |
+| reward_funcs.py | GRPO reward function library |
 | pt.py | Complete pre-training workflow |
 | sft_accelerator.py | Most comprehensive implementation, integrating DeepSpeed distributed training, 8-bit quantization training, amp mixed precision training, and wandb real-time metrics and generation effect tracking |
 | sft_amp.py | Refactored from vanilla, integrating amp mixed precision training and 8-bit quantization training |
 | sft_vanilla.py | Concise SFT workflow with distributed training capability. Non-essential features removed to improve readability |
-| grpo.py | GRPO main program |
-| grpo_trainer.py | GRPO implementation from scratch |
-| reward_funcs.py | GRPO reward function library |
 
 ## Supported Datasets
 | Dataset Name     | Description               | Training Process               |
@@ -110,6 +113,74 @@ conda create -n hobo-llm python=3.10
 pip install -r requirements.txt
 ```
 
+### GRPO
+
+```bash
+# launch grpo training
+accelerate launch grpo.py \
+    --model_name_or_path "lm_models/Qwen2.5-0.5B-Instruct" \
+    --dataset_dir "dataset/tldr" \
+    --learning_rate 1e-6 \
+    --resume False \
+    --batch_size 4 \
+    --mini_batch_size 1 \
+    --gradient_accumulation_steps 1 \
+    --num_epochs 2 \
+    --group_num 8 \
+    --max_grad_norm 1 \
+    --log_steps 1 \
+    --save_steps 10 \
+    --max_save 3 \
+    --wandb_project "grpo_training"
+
+# launch grpo training 8bit quantized with lora
+accelerate launch grpo.py \
+    --model_name_or_path "lm_models/Qwen2.5-0.5B-Instruct" \
+    --dataset_dir "dataset/tldr" \
+    --learning_rate 1e-6 \
+    --resume False \
+    --batch_size 2 \
+    --gradient_accumulation_steps 1 \
+    --num_epochs 2 \
+    --log_steps 1 \
+    --save_steps 10 \
+    --max_grad_norm 1 \
+    --max_save 3 \
+    --wandb_project "grpo_training" \
+    --group_num 8 \
+    --mini_batch_size 1 \
+    --use_8bit True \
+    --use_peft True \
+    --lora_rank 16 \
+    --lora_alpha 16 \
+    --lora_dropout 0.1 \
+    --target_modules "q_proj,v_proj,lm_head"
+
+# launch grpo training with qlora
+accelerate launch grpo.py \
+    --model_name_or_path "lm_models/Qwen2.5-0.5B-Instruct" \
+    --dataset_dir "dataset/tldr" \
+    --learning_rate 1e-6 \
+    --resume False \
+    --batch_size 2 \
+    --gradient_accumulation_steps 1 \
+    --num_epochs 2 \
+    --log_steps 1 \
+    --save_steps 10 \
+    --max_grad_norm 1 \
+    --max_save 3 \
+    --wandb_project "grpo_training" \
+    --group_num 8 \
+    --mini_batch_size 1 \
+    --use_4bit True \
+    --qlora True \
+    --use_peft True \
+    --lora_rank 16 \
+    --lora_alpha 16 \
+    --lora_dropout 0.1 \
+    --target_modules "q_proj,v_proj,lm_head"
+```
+
 ### SFT
 
 ```bash
@@ -130,28 +201,6 @@ python sft_accelerator.py \
 # accelerate deepspeed training
 bash scripts/train_accelerate_sft.sh
 ```
-
-### GRPO
-
-```bash
-# launch grpo training
-accelerate launch grpo.py \
-    --model_name_or_path "lm_models/Qwen2.5-0.5B-Instruct" \
-    --dataset_dir "dataset/tldr" \
-    --learning_rate 1e-6 \
-    --resume False \
-    --batch_size 4 \
-    --mini_batch_size 1 \
-    --gradient_accumulation_steps 1 \
-    --num_epochs 2 \
-    --group_num 8 \
-    --max_grad_norm 1 \
-    --log_steps 1 \
-    --save_steps 10 \
-    --max_save 3 \
-    --wandb_project "grpo_training"
-```
-
 
 ## TODO
 - [ ] Implement MOE/MLA
