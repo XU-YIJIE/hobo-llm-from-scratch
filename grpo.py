@@ -11,11 +11,12 @@ from reward_funcs import (
     perplexity_reward,
     repetition_reward,
     length_reward,
-    chinese_char_ratio_reward
+    chinese_char_ratio_reward,
+    # llm_rater_reward
 )
 import os
 from loguru import logger
-from accelerate import Accelerator
+from accelerate import Accelerator, DistributedDataParallelKwargs
 import numpy as np
 from torch.utils.data import DataLoader
 from functools import partial
@@ -27,7 +28,6 @@ from typing import Dict, List, Any
 import sys
 import gc
 import argparse
-from data.aligner import convert_tldr
 from peft import LoraConfig, TaskType, get_peft_model
 from arguments import parse_args
 import shutil
@@ -147,7 +147,7 @@ class Trainer:
             max_grad_norm=self.max_grad_norm,
         )
         
-        self.accelerator = Accelerator(gradient_accumulation_steps=self.gradient_accumulation_steps)
+        self.accelerator = Accelerator(gradient_accumulation_steps=self.gradient_accumulation_steps, kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=True)])
         self.initializer()
         
         if self.accelerator.is_main_process:
@@ -353,6 +353,7 @@ class Trainer:
         perplexity_reward_func.__name__ = "perplexity_reward"
         reward_funcs = [
             perplexity_reward_func,
+            # llm_rater_reward, 
             repetition_reward,
             length_reward,
             # chinese_char_ratio_reward
