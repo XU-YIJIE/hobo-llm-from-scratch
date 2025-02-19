@@ -627,11 +627,11 @@ class Trainer:
 if __name__ == "__main__":
     args = parse_args()
     # args.preprocessing_num_workers = 1
-    # args.dataset_dir = "dataset/deepctrl-sft-data"
-    # args.dataset_name = "deepctrl-sft-data"
-    # args.input_jsonl = "sft_data_en.jsonl"
+    # args.dataset_dir = "dataset/sharegpt_gpt4"
+    # args.dataset_name = "sharegpt_gpt4"
+    # args.input_jsonl = "sharegpt_gpt4.jsonl"
     
-    # args.from_scratch = False
+    # args.from_scratch = True
     # args.use_peft = True
     # args.target_modules = "q_proj,v_proj,lm_head"
     # args.use_4bit = True

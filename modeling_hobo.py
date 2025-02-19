@@ -20,8 +20,10 @@ def rotate_half(x):
 
 def apply_rotary_pos_emb(q, k, cos, sin):
     """Applies Rotary Position Embedding to the query and key tensors.
+    q: (b, n_heads, seq_len, size_per_head)
+    cos: (1, seq_len, emb_dim * 2)
     """
-    cos = cos.unsqueeze(1)
+    cos = cos.unsqueeze(1)  # 1, 1, seq_len, emb_dim * 2
     sin = sin.unsqueeze(1)
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
@@ -55,15 +57,18 @@ class RotaryEmbedding(nn.Module):
         super().__init__()
         self.head_dim = head_dim
         self.theta = theta
-        inv_freq = 1.0 / (self.theta ** (torch.arange(0, head_dim, 2).float() / head_dim))
+        inv_freq = 1.0 / (self.theta ** (torch.arange(0, head_dim, 2).float() / head_dim))  # 1, head_dim / 2
         self.register_buffer("inv_freq", inv_freq)
     
     def forward(self, hidden_state, position_ids):
+        '''
+        position_ids: (1, seq_len)
+        '''
         inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)  # 广播到batch维度
         position_ids_expanded = position_ids[:, None, :].float()
-        freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
+        freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)  # 1, seq_len, head_dim / 2
         emb = torch.cat((freqs, freqs), dim=-1)
-        cos = emb.cos()
+        cos = emb.cos()  # 1, seq_len, head_dim
         sin = emb.sin()
         return cos.to(dtype=hidden_state.dtype), sin.to(dtype=hidden_state.dtype)
 
@@ -348,7 +353,7 @@ class HoboGPTModelForCausalLM(PreTrainedModel, GenerationMixin):
         if isinstance(module, GPTBlock):
             module.gradient_checkpointing = value
     
-    def forward(self, input_ids, attention_mask, labels=None, inputs_embeds=None, position_ids=None, num_logits_to_keep=0, past_key_values=None, use_cache=False, cache_position=None, return_dict=False):
+    def forward(self, input_ids, attention_mask, labels=None, inputs_embeds=None, position_ids=None, num_logits_to_keep=0, past_key_values=None, use_cache=False, cache_position=None, return_dict=False, **kwargs):
         outputs = self.model(input_ids, attention_mask, position_ids, past_key_values, use_cache, cache_position)
         
         hidden_states, past_key_values = outputs
