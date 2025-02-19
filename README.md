@@ -218,10 +218,10 @@ bash scripts/train_accelerate_sft.sh
 
 ## Citation
 ```bibtex
-@software{hobo_llm2024,
+@misc{hobo_llm-2025,
     title = {Hobo-LLM: From SFT to GRPO},
     author = {XU-YIJIE},
-    year = {2024},
+    year = {2025},
     publisher = {GitHub},
     url = {https://github.com/XU-YIJIE/hobo-llm}
 }
