@@ -46,7 +46,6 @@ class DataCollatorForSeq2Seq:
             labels = None
         non_labels_features = [{k: v for k, v in feature.items() if k != label_name} for feature in features]
 
-        # 运行tokenizer
         batch = pad_without_fast_tokenizer_warning(
             self.tokenizer,
             non_labels_features,
@@ -100,7 +99,6 @@ class DataCollatorForSeq2Seq:
                         for label in labels
                     ]
 
-        # 转换为张量
         if batch.get("labels", None) is not None:
             batch["labels"] = torch.tensor(batch["labels"], dtype=torch.long)
         else:
@@ -157,7 +155,6 @@ def parse_args():
     return args
 
 def create_ds_config(args):
-    """创建DeepSpeed配置"""
     ds_config = {
         "train_micro_batch_size_per_gpu": args.per_device_train_batch_size,
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
@@ -219,8 +216,6 @@ def create_ds_config(args):
 
 
 def initialize_dataset_and_dataloader(args, tokenizer):
-    """初始化数据集和数据加载器"""
-    # 加载数据集
     dataset = load_dataset(path=args.dataset_dir, data_files=args.input_jsonl, split="train") 
     data_args = DataArguments(template=args.template, cutoff_len=args.cutoff_len, train_on_prompt=False, mask_history=False, preprocessing_num_workers=args.preprocessing_num_workers)
     
@@ -241,8 +236,6 @@ def initialize_dataset_and_dataloader(args, tokenizer):
     )
     
     sample_dataset = list(itertools.islice(dataset, 1))
-    if not sample_dataset:
-        raise ValueError("数据集为空")
     
     column_names_to_remove = list(next(iter(dataset)).keys())
     
@@ -276,22 +269,16 @@ def initialize_dataset_and_dataloader(args, tokenizer):
 
 
 def train(args):
-    # 初始化分布式环境
     deepspeed.init_distributed()
     
-    # 创建tokenizer
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, trust_remote_code=True)
     
-    # 获取pipeline模型
     model = get_deepspeed_pipemodule(args, args.pp_size)
     
-    # 创建DeepSpeed配置
     ds_config = create_ds_config(args)
     
-    # 创建数据加载器
     train_dataloader, total_training_steps = initialize_dataset_and_dataloader(args, tokenizer)
     
-    # 初始化DeepSpeed引擎
     model_engine, _, _, _ = deepspeed.initialize(
         model=model,
         config=ds_config,
@@ -299,25 +286,19 @@ def train(args):
         # training_data=train_dataloader
     )
     
-    # 训练循环
     for epoch in range(args.num_epochs):
         model_engine.train()
         
-        # for step, batch in enumerate(train_dataloader):
-        # 准备数据迭代器
+        # for step, batch in enumerate(train_dataloader)
         train_dataloader = deepspeed.utils.RepeatingLoader(train_dataloader)
         train_iterator = iter(train_dataloader)
         
-        # 训练循环
         for iteration in range(total_training_steps):
-            # 训练步骤
             loss = model_engine.train_batch(data_iter=train_iterator)
             
-            # 打印训练信息
             if dist.get_rank() == 0 and iteration % 100 == 0:
                 print(f"Epoch: {epoch}, Step: {iteration}, Loss: {loss.item():.4f}")
         
-        # 保存检查点
         if dist.get_rank() == 0:
             model_engine.save_checkpoint(
                 save_dir=os.path.join(args.output_dir, f"epoch_{epoch}")
