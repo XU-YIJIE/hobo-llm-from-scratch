@@ -6,6 +6,7 @@ from transformers import (
     PreTrainedTokenizer,
     BitsAndBytesConfig
 )
+from data.aligner import convert_tldr
 from grpo_trainer import GRPOTrainer, GRPOConfig
 from reward_funcs import (
     perplexity_reward,

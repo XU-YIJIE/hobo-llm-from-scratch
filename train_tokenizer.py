@@ -15,6 +15,7 @@ from tokenizers import (
     models,
 )
 from transformers import PreTrainedTokenizerFast
+from tqdm import tqdm
 
 QWEN_SPECIAL_TOKENS = [
     "<|endoftext|>",
@@ -43,23 +44,44 @@ def format_chat_message(role: str, content: str) -> str:
     return f"<|im_start|>{role}\n{content}<|im_end|>"
 
 
-def load_training_data(
-    dataset_dir: str,
-    input_jsonl: List[str],
-) -> List[str]:
-    dataset = load_dataset(path=dataset_dir, data_files=input_jsonl, split="train")
+def load_training_data(dataset_dir: str, input_jsonl: List[str], num_proc: int = 4) -> List[str]:
+    # 使用多进程加载数据集
+    dataset = load_dataset(
+        path=dataset_dir,
+        data_files=input_jsonl,
+        split="train",
+        num_proc=num_proc,
+        cache_dir="./.cache"
+    )
+    dataset = dataset.select(range(100))
+    
+    def process_item(example):
+        texts = []
+        if example["history"]:
+            texts.extend([
+                format_chat_message("user", msg[0]) + "\n" + format_chat_message("assistant", msg[1])
+                for msg in example["history"]
+            ])
+        
+        if example["instruction"]:
+            texts.append(format_chat_message("system", example["instruction"]))
+        if example["input"]:
+            texts.append(format_chat_message("user", example["input"]))
+        if example["output"]:
+            texts.append(format_chat_message("assistant", example["output"]))
+        
+        return {"texts": texts}
+    
+    processed_dataset = dataset.map(
+        process_item,
+        num_proc=num_proc,
+        desc="processing training data",
+        remove_columns=dataset.column_names
+    )
+    
     texts = []
-    for item in dataset:
-        if item["history"]:
-            for user_msg, assistant_msg in item["history"]:
-                texts.append(format_chat_message("user", user_msg))
-                texts.append(format_chat_message("assistant", assistant_msg))
-        if item["instruction"]:
-            texts.append(format_chat_message("system", item["instruction"]))
-        if item["input"]:
-            texts.append(format_chat_message("user", item["input"]))
-        if item["output"]:
-            texts.append(format_chat_message("assistant", item["output"]))
+    for item in processed_dataset:
+        texts.extend(item["texts"])
     
     return texts
 
@@ -100,9 +122,6 @@ def train_and_save_tokenizer(
         initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),  # ASCII + UTF-8
     )
     
-    # train tokenizer
-    tokenizer.train_from_iterator(texts, trainer=trainer)
-    
     tokenizer.post_processor = processors.TemplateProcessing(
         single="$A",
         pair="$A $B",  # 句对输入的处理
@@ -142,7 +161,7 @@ def parse_args():
     parser.add_argument("--vocab_size", type=int, default=8000, help="vocab size")
     parser.add_argument("--min_frequency", type=int, default=2, help="min frequency")
     parser.add_argument("--save_dir", type=str, default="tokenizer", help="save directory")
-    parser.add_argument("--num_proc", type=int, default=4, help="number of processes for loading data")
+    parser.add_argument("--num_proc", type=int, default=8, help="number of processes for loading data")
     args = parser.parse_args()
     return args
 
@@ -152,6 +171,7 @@ def main(args):
     texts = load_training_data(
         dataset_dir=args.dataset_dir,
         input_jsonl=args.input_jsonl,
+        num_proc=args.num_proc
     )
     
     # train tokenizer
