@@ -87,9 +87,6 @@ class EmbeddingPipeLayer(nn.Module):
         
         hidden_states = self.embed_tokens(input_ids)
         
-        if not hidden_states.requires_grad:
-            hidden_states.requires_grad_(True)
-        
         batch_size, seq_length = input_ids.shape
         attention_mask = _prepare_4d_causal_attention_mask(
             attention_mask,
@@ -99,8 +96,8 @@ class EmbeddingPipeLayer(nn.Module):
             sliding_window=getattr(self.config, 'sliding_window', None)
         )
         
-        dtype = hidden_states.dtype
-        attention_mask = attention_mask.to(dtype=dtype, device=device)
+        # dtype = hidden_states.dtype
+        attention_mask = attention_mask.to(dtype=torch.long, device=device)
         
         return hidden_states, attention_mask, position_ids, labels
 
@@ -115,8 +112,8 @@ class TransformerPipeLayer(nn.Module):
     def forward(self, inputs):
         hidden_states, attention_mask, position_ids, labels = inputs
         
-        if not hidden_states.requires_grad:
-            hidden_states.requires_grad_(True)
+        # if not hidden_states.requires_grad:
+        #     hidden_states.requires_grad_(True)
         
         seq_length = hidden_states.shape[1]
         position_embeddings = self.rotary_emb(seq_length)
@@ -132,8 +129,8 @@ class TransformerPipeLayer(nn.Module):
                     use_cache=False
                 )
                 output = outputs[0]
-                if not output.requires_grad:
-                    output.requires_grad_(True)
+                # if not output.requires_grad:
+                #     output.requires_grad_(True)
                 return output
             
             hidden_states = torch.utils.checkpoint.checkpoint(
@@ -153,9 +150,11 @@ class TransformerPipeLayer(nn.Module):
                 use_cache=False
             )
             hidden_states = outputs[0]
-            if not hidden_states.requires_grad:
-                hidden_states.requires_grad_(True)
-        
+        # if not hidden_states.requires_grad:
+        #     hidden_states.requires_grad_(True)
+        print(f'RANK={dist.get_rank()} +++++++++++++++++++++++++++')
+        print("hidden_states", hidden_states, hidden_states.shape)
+        print(f'RANK={dist.get_rank()} +++++++++++++++++++++++++++')
         return hidden_states, attention_mask, position_ids, labels
 
 
@@ -201,8 +200,8 @@ class LMHeadPipeLayer(nn.Module):
         del shift_logits
         torch.cuda.empty_cache()
         
-        if not shift_logits_float.requires_grad:
-            shift_logits_float.requires_grad_(True)
+        # if not shift_logits_float.requires_grad:
+        #     shift_logits_float.requires_grad_(True)
         
         loss = self.loss_fct(
             shift_logits_float.view(-1, shift_logits_float.size(-1)),
@@ -213,15 +212,14 @@ class LMHeadPipeLayer(nn.Module):
         torch.cuda.empty_cache()
         
         loss = loss.to(orig_dtype)
-        if not loss.requires_grad:
-            loss.requires_grad_(True)
+        # if not loss.requires_grad:
+        #     loss.requires_grad_(True)
         
         return loss
 
 
 def loss_fn(loss_tensor, *args, **kwargs):
     if not loss_tensor.requires_grad:
-        loss_tensor = loss_tensor.detach()
         loss_tensor.requires_grad_(True)
     return loss_tensor
 
