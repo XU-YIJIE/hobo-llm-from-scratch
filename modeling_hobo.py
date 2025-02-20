@@ -53,17 +53,50 @@ class RMSNorm(nn.Module):
         return self.weight * output.to(input_dtype)  # 均方根归一化，公式：x / sqrt(x^2 + eps) * weight
 
 class RotaryEmbedding(nn.Module):
-    def __init__(self, head_dim: int, theta: float = 10000.0):
+    def __init__(self, head_dim: int, base: float = 10000.0, max_position_embeddings: int = 2048, scaling_factor: float = 1.0):
         super().__init__()
         self.head_dim = head_dim
-        self.theta = theta
-        inv_freq = 1.0 / (self.theta ** (torch.arange(0, head_dim, 2).float() / head_dim))  # 1, head_dim / 2
-        self.register_buffer("inv_freq", inv_freq)
+        self.base = base
+        self.scaling_factor = scaling_factor
+        self.max_position_embeddings = max_position_embeddings
+        self.max_seq_len_cached = max_position_embeddings
+        self.original_max_seq_len = max_position_embeddings
+        
+        inv_freq = 1.0 / (self.base ** (torch.arange(0, head_dim, 2).float() / head_dim))  # 1, head_dim / 2
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+        self.register_buffer("original_inv_freq", inv_freq.clone(), persistent=False)
     
-    def forward(self, hidden_state, position_ids):
+    def _compute_scaled_inv_freq(self, seq_len, device):
+        # if seq_len > self.max_position_embeddings
+        scaled_base = self.base * ((self.scaling_factor * seq_len / self.max_position_embeddings) - (self.scaling_factor - 1)) ** (self.head_dim / (self.head_dim - 2))
+        scaled_inv_freq = 1.0 / (scaled_base ** (torch.arange(0, self.head_dim, 2).float().to(device) / self.head_dim))
+        return scaled_inv_freq
+            
+    def _dynamic_frequency_update(self, position_ids, device):
+        """
+        dynamic RoPE layers should recompute `inv_freq` in the following situations:
+        1 - growing beyond the cached sequence length (allow scaling)
+        2 - the current sequence length is in the original scale (avoid losing precision with small sequences)
+        """
+        seq_len = torch.max(position_ids) + 1
+        if seq_len > self.max_seq_len_cached:  # growth
+            inv_freq = self._compute_scaled_inv_freq(seq_len=seq_len, device=device)
+            self.register_buffer("inv_freq", inv_freq, persistent=False)
+            self.max_seq_len_cached = seq_len
+
+        if seq_len < self.original_max_seq_len and self.max_seq_len_cached > self.original_max_seq_len:  # reset inv_freq
+            # This .to() is needed if the model has been moved to a device after being initialized (because
+            # the buffer is automatically moved, but not the original copy)
+            self.original_inv_freq = self.original_inv_freq.to(device)
+            self.register_buffer("inv_freq", self.original_inv_freq, persistent=False)
+            self.max_seq_len_cached = self.original_max_seq_len
+    
+    @torch.no_grad()
+    def forward(self, hidden_state, position_ids, seq_len):
         '''
         position_ids: (1, seq_len)
         '''
+        self._dynamic_frequency_update(position_ids, device=hidden_state.device)
         inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)  # 广播到batch维度
         position_ids_expanded = position_ids[:, None, :].float()
         freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)  # 1, seq_len, head_dim / 2
@@ -97,7 +130,9 @@ class Attention(nn.Module):
         
         self.rotary_emb = RotaryEmbedding(
             head_dim=self.size_per_head,
-            theta=config.rope_theta
+            base=config.rope_theta,
+            max_position_embeddings=config.max_position_embeddings,
+            scaling_factor=config.rope_scaling
         )
         
     def forward(self, hidden_states, attention_mask, position_ids, cache_position, past_key_values: Cache=None, use_cache=False):
