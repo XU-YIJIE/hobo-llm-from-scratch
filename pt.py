@@ -45,9 +45,9 @@ logger.add(
     filter=lambda record: record["level"].name in ["INFO", "ERROR"]
 )
 
-os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
-os.environ["NCCL_P2P_DISABLE"] = "1"
-os.environ["NCCL_IB_DISABLE"] = "1"  # Using RTX 4000 series doesn't support faster communication broadband via P2P or IB
+# os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+# os.environ["NCCL_P2P_DISABLE"] = "1"
+# os.environ["NCCL_IB_DISABLE"] = "1"  # Using RTX 4000 series doesn't support faster communication broadband via P2P or IB
 
 args = parse_args()
 

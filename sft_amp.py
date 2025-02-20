@@ -40,7 +40,7 @@ logger = logger.bind(name="sft")
 #     filter=lambda record: record["level"].name in ["INFO", "ERROR"]
 # )
 
-os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+# os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
 
 def parse_args():
