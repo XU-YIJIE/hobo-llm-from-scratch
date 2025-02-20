@@ -1,6 +1,7 @@
 #!/bin/bash
 
 export CUDA_VISIBLE_DEVICES=0,1
+export NUM_GPUS=2
 
 MODEL_PATH="lm_models/Qwen2.5-0.5B-Instruct"
 OUTPUT_DIR="outputs/qwen_sft"
@@ -11,7 +12,7 @@ mkdir -p $OUTPUT_DIR
 
 deepspeed \
     --num_gpus=$NUM_GPUS \
-    train_ds_pipe.py \
+    sft_ds_pipe.py \
     --model_name_or_path $MODEL_PATH \
     --output_dir $OUTPUT_DIR \
     --pp_size $PP_SIZE \
