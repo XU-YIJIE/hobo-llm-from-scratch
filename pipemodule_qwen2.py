@@ -152,9 +152,9 @@ class TransformerPipeLayer(nn.Module):
             hidden_states = outputs[0]
         # if not hidden_states.requires_grad:
         #     hidden_states.requires_grad_(True)
-        print(f'RANK={dist.get_rank()} +++++++++++++++++++++++++++')
-        print("hidden_states", hidden_states, hidden_states.shape)
-        print(f'RANK={dist.get_rank()} +++++++++++++++++++++++++++')
+        # print(f'RANK={dist.get_rank()} +++++++++++++++++++++++++++')
+        # print("hidden_states", hidden_states, hidden_states.shape)
+        # print(f'RANK={dist.get_rank()} +++++++++++++++++++++++++++')
         return hidden_states, attention_mask, position_ids, labels
 
 

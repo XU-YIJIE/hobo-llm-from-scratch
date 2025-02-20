@@ -1,19 +1,14 @@
 #!/bin/bash
 
-# 设置环境变量
-export CUDA_VISIBLE_DEVICES=0,1  # 根据实际GPU数量修改
+export CUDA_VISIBLE_DEVICES=0,1
 
-# 训练参数
-MODEL_PATH="lm_models/Qwen2.5-0.5B-Instruct"  # Qwen2模型路径
-OUTPUT_DIR="outputs/qwen_sft"           # 输出目录
-NUM_GPUS=2                   # 总GPU数量
-PP_SIZE=2                    # Pipeline并行度
-DP_SIZE=$((NUM_GPUS/PP_SIZE))  # 数据并行度
+MODEL_PATH="lm_models/Qwen2.5-0.5B-Instruct"
+OUTPUT_DIR="outputs/qwen_sft"
+PP_SIZE=2
+DP_SIZE=$((NUM_GPUS/PP_SIZE))
 
-# 创建输出目录
 mkdir -p $OUTPUT_DIR
 
-# 启动分布式训练
 deepspeed \
     --num_gpus=$NUM_GPUS \
     train_ds_pipe.py \
