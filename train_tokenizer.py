@@ -45,7 +45,6 @@ def format_chat_message(role: str, content: str) -> str:
 
 
 def load_training_data(dataset_dir: str, input_jsonl: List[str], num_proc: int = 4) -> List[str]:
-    # 使用多进程加载数据集
     dataset = load_dataset(
         path=dataset_dir,
         data_files=input_jsonl,
@@ -53,8 +52,7 @@ def load_training_data(dataset_dir: str, input_jsonl: List[str], num_proc: int =
         num_proc=num_proc,
         cache_dir="./.cache"
     )
-    dataset = dataset.select(range(100))
-    
+    # dataset = dataset.select(range(100))
     def process_item(example):
         texts = []
         if example["history"]:
@@ -93,25 +91,25 @@ def train_and_save_tokenizer(
     save_dir: str = "tokenizer",
     special_tokens: Optional[List[str]] = None
 ) -> Tokenizer:
-    """类Qwen的BPE tokenizer"""
+    """Qwen-style BPE tokenizer"""
     if special_tokens is None:
         special_tokens = QWEN_SPECIAL_TOKENS
     
     tokenizer = Tokenizer(models.BPE(
-        dropout=None,  # 不使用dropout，保持分词的确定性
-        fuse_unk=False,  # 不融合未知token，保持每个未知token独立
+        dropout=None,  # not use dropout, keep the determinism of tokenization
+        fuse_unk=False,  # not fuse unknown tokens, keep each unknown token independent
     ))
     
     tokenizer.normalizer = normalizers.Sequence([
-        normalizers.Replace(r"\s+", " "),  # 合并多个空格
-        normalizers.Strip(),  # 去除首尾空格
-        normalizers.NFKC(),  # Unicode标准化
-        normalizers.Replace(r"[^\x00-\x7F\u4E00-\u9FFF]", ""),  # 只保留ASCII和中文字符
+        normalizers.Replace(r"\s+", " "),  # merge multiple spaces
+        normalizers.Strip(),  # remove leading and trailing spaces
+        normalizers.NFKC(),  # Unicode normalization
+        normalizers.Replace(r"[^\x00-\x7F\u4E00-\u9FFF]", ""),  # only keep ASCII and Chinese characters
     ])
     
     tokenizer.pre_tokenizer = pre_tokenizers.Sequence([
-        pre_tokenizers.ByteLevel(add_prefix_space=False),  # 按utf8字节分割
-        pre_tokenizers.Digits(individual_digits=True),  # 数字单独分词
+        pre_tokenizers.ByteLevel(add_prefix_space=False),  # split by utf8 bytes
+        pre_tokenizers.Digits(individual_digits=True),  # split by digits
     ])
     
     trainer = trainers.BpeTrainer(
@@ -122,14 +120,17 @@ def train_and_save_tokenizer(
         initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),  # ASCII + UTF-8
     )
     
+    # train tokenizer
+    tokenizer.train_from_iterator(texts, trainer=trainer)
+    
     tokenizer.post_processor = processors.TemplateProcessing(
         single="$A",
         pair="$A $B",  # 句对输入的处理
         special_tokens=[
             ("<|endoftext|>", tokenizer.token_to_id("<|endoftext|>")),
             ("<|im_start|>", tokenizer.token_to_id("<|im_start|>")),
-            ("<|im_end|>", tokenizer.token_to_id("<|im_end|>")),
-        ],
+            ("<|im_end|>", tokenizer.token_to_id("<|im_end|>"))
+        ]
     )
     
     # save tokenizer
