@@ -229,6 +229,7 @@ class Trainer:
                 config = AutoConfig.from_pretrained(**kwargs)
                 config.update({"num_additional_preds": self.num_additional_preds, "mtp_lambda_weight": self.mtp_lambda_weight})
                 self.model = Qwen2MTPForCausalLM(config=config)
+                self.model.load_state_dict(AutoModelForCausalLM.from_pretrained(**kwargs).state_dict(), strict=False)
             else:
                 self.model = AutoModelForCausalLM.from_pretrained(**kwargs)
         
@@ -652,6 +653,9 @@ if __name__ == "__main__":
     # args.modules_to_save = None
     # # args.qlora = True
     # args.batch_size = 2
+    # args.mtp = True
+    # args.num_additional_preds = 1
+    # args.mtp_lambda_weight = 1.0
     # data_args = DataArguments(template=args.template, 
     #                           cutoff_len=args.cutoff_len, 
     #                           train_on_prompt=False, 
