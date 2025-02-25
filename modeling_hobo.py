@@ -1,7 +1,8 @@
+from typing import Callable
 from torch import nn
 import torch
 import torch.nn.functional as F
-from transformers import PreTrainedModel, Qwen2Model, Qwen2Config, GenerationMixin
+from transformers import PreTrainedModel, Qwen2Model, Qwen2Config, GenerationMixin, Qwen2ForCausalLM
 from transformers.integrations.flash_attention import flash_attention_forward
 from transformers.cache_utils import DynamicCache, Cache
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
@@ -203,9 +204,43 @@ class GPTBlock(nn.Module):
         
     def forward(self, hidden_states, attention_mask, position_ids, cache_position, past_key_values=None, use_cache=False):
         residual = hidden_states + self.attention(self.norm1(hidden_states), attention_mask, position_ids, cache_position, past_key_values, use_cache)  # llama2的normalization位于输入之前
-        output = residual + self.mlp(self.norm2(residual))
-        return output, past_key_values
+        hidden_state = residual + self.mlp(self.norm2(residual))
+        return hidden_state, past_key_values
+    
+class MTPSub(nn.Module):
+    def __init__(self, config:MyConfig):
+        super().__init__()
+        self.config = config
+        self.norm = RMSNorm(config.hidden_size)
+        self.linear = nn.Linear(config.hidden_size * 2, config.hidden_size)
+        self.transformer = GPTBlock(config, -1)
+    
+    def forward(self, hidden_states, inputs_embeds):
+        concat = torch.cat([self.norm(hidden_states), self.norm(inputs_embeds)], dim=-1)
+        proj = self.linear(concat)
+        hidden_state, _ = self.transformer(proj)
+        return hidden_state
 
+class MTP(nn.Module):
+    def __init__(self, config:MyConfig):
+        super().__init__()
+        self.config = config
+        self.num_additional_preds = config.num_additional_preds
+        self.mtps = nn.ModuleList([MTPSub(config) for _ in range(self.num_additional_preds)])
+
+    def forward(self, hidden_states, inputs_embeds, lm_head:nn.Linear):
+        # 0,1,2,3,4: 0,1,2,3 => 1,2,3,4
+        # 0,1 => 1,2 -> 2,3 -> 3,4  # num_additional_preds = 2
+        logits_list = []
+        _, seq_len, _ = hidden_states.shape
+        for k in range(1, self.num_additional_preds+1):
+            start_index = k
+            end_index = start_index + seq_len - self.num_additional_preds
+            hidden_states = self.mtps[k-1](hidden_states[:, start_index:end_index, :], inputs_embeds[:, start_index:end_index, :])
+            logits = lm_head(hidden_states)  # b, seq_len-k, vocab_size
+            logits_list.append(logits)
+        return hidden_states, logits_list
+        
 
 class GPTModel(PreTrainedModel):
     config_class = MyConfig
@@ -220,7 +255,6 @@ class GPTModel(PreTrainedModel):
         self.embedding_layer = nn.Embedding(config.vocab_size, config.hidden_size)
         self.decoder_layers = nn.ModuleList([GPTBlock(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
         self.rms_norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size)
         self.gradient_checkpointing = False
         # causal_mask = torch.full(
         #     (config.max_position_embeddings, config.max_position_embeddings), 
@@ -363,6 +397,9 @@ class GPTModel(PreTrainedModel):
                 causal_mask[:, :, :, :target_length] = causal_mask[:, :, :, :target_length].masked_fill(padding_mask, min_dtype)  # 最终的mask
             
         return causal_mask
+    
+    def get_input_embeds(self):
+        return self.embedding_layer
 
 
 class HoboGPTModelForCausalLM(PreTrainedModel, GenerationMixin):
@@ -396,22 +433,21 @@ class HoboGPTModelForCausalLM(PreTrainedModel, GenerationMixin):
         logits = self.lm_head(hidden_states[:, -num_logits_to_keep:, :])
 
         loss = None
-        if labels is not None:
+        if self.training and labels is not None:
             # Upcast to float if we need to compute the loss to avoid potential precision issues
             logits = logits.float()
             labels = labels.to(logits.device)
             
-            if self.training:
-                # Shift so that tokens < n predict n
-                shift_logits = logits[..., :-1, :].contiguous()
-                shift_labels = labels[..., 1:].contiguous()
+            # Shift so that tokens < n predict n
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
 
-                # Flatten the tokens
-                shift_logits = shift_logits.view(-1, self.config.vocab_size)
-                shift_labels = shift_labels.view(-1)
-                # Enable model parallelism
-                shift_labels = shift_labels.to(shift_logits.device)
-                loss = fixed_cross_entropy(shift_logits, shift_labels)
+            # Flatten the tokens
+            shift_logits = shift_logits.view(-1, self.config.vocab_size)
+            shift_labels = shift_labels.view(-1)
+            # Enable model parallelism
+            shift_labels = shift_labels.to(shift_logits.device)
+            loss = fixed_cross_entropy(shift_logits, shift_labels)
         
         output = (logits, past_key_values)
         if return_dict:
@@ -422,6 +458,89 @@ class HoboGPTModelForCausalLM(PreTrainedModel, GenerationMixin):
             )
         else:
             return (loss,) + output if loss is not None else output
+
+
+class HoboMTPGPTModelForCausalLM(PreTrainedModel):
+    _tied_weights_keys = ["lm_head.weight"]
+    config_class = MyConfig
+    base_model_prefix = "model"
+    supports_gradient_checkpointing = True
+    def __init__(self, config: MyConfig):
+        super().__init__(config)
+        self.config = config
+        self.model = GPTModel(config)
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size)
+        self.mtp = MTP(config)
+        self.gradient_checkpointing = False
+        self.post_init()
+    
+    def gradient_checkpointing_enable(self):
+        """启用梯度检查点功能"""
+        self.gradient_checkpointing = True
+        self.model.gradient_checkpointing = True
+        self.model.gradient_checkpointing_enable()
+    
+    def _set_gradient_checkpointing(self, module, value=False):
+        if isinstance(module, GPTBlock):
+            module.gradient_checkpointing = value
+    
+    def forward(self, input_ids, attention_mask, labels=None, inputs_embeds=None, position_ids=None, num_logits_to_keep=0, past_key_values=None, use_cache=False, cache_position=None, return_dict=False, **kwargs):
+        outputs = self.model(input_ids, attention_mask, position_ids, past_key_values, use_cache, cache_position)
+        
+        hidden_states, past_key_values = outputs
+        # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
+        logits = self.lm_head(hidden_states[:, -num_logits_to_keep:, :])
+        
+        if not inputs_embeds:
+            inputs_embeds = self.model.get_input_embeds()(input_ids)
+        hidden_states, logits_list = self.mtp(hidden_states, inputs_embeds, self.lm_head)
+
+        loss = None
+            
+        if self.training and labels is not None:
+            # Upcast to float if we need to compute the loss to avoid potential precision issues
+            logits = logits.float()
+            labels = labels.to(logits.device)
+            _, seq_len, _ = logits.shape
+            mtp_loss = 0
+            for k in range(1, self.config.num_additional_preds+1):
+                # 0,1,2,3,4: 0,1,2,3 => 1,2,3,4
+                # 0,1 => 1,2 -> 2,3 -> 3,4  # num_additional_preds = 2
+                start_index = k + 1
+                end_index = start_index + seq_len - self.config.num_additional_preds
+                mtp_logits = logits_list[k-1].contiguous()
+                mtp_labels = labels[..., start_index:end_index].contiguous()
+
+                # Flatten the tokens
+                mtp_logits = mtp_logits.view(-1, self.config.vocab_size)
+                mtp_labels = mtp_labels.view(-1)
+                # Enable model parallelism
+                mtp_labels = mtp_labels.to(mtp_logits.device)
+                mtp_loss += fixed_cross_entropy(mtp_logits, mtp_labels)
+                
+            mtp_loss = self.config.mtp_lambda_weight * mtp_loss / self.config.num_additional_preds
+            
+            # Shift so that tokens < n predict n
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+
+            # Flatten the tokens
+            shift_logits = shift_logits.view(-1, self.config.vocab_size)
+            shift_labels = shift_labels.view(-1)
+            # Enable model parallelism
+            shift_labels = shift_labels.to(shift_logits.device)
+            loss = fixed_cross_entropy(shift_logits, shift_labels) + mtp_loss
+        
+        output = (logits, past_key_values)
+        if return_dict:
+            return CausalLMOutputWithPast(
+                loss=loss,
+                logits=logits,
+                past_key_values=past_key_values,
+            )
+        else:
+            return (loss,) + output if loss is not None else output
+
 
 if __name__ == "__main__":
     

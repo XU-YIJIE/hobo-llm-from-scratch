@@ -18,7 +18,7 @@ def parse_args():
     parser.add_argument("--torch_dtype", type=str, default="float16", help="torch_dtype", choices=["bfloat16", "float16", "float32"])
     parser.add_argument("--model_tag", type=str, default=None, help="model_tag")
     parser.add_argument("--from_scratch", type=bool, default=True, help="if to train from scratch")
-    parser.add_argument("--model_out_dir", type=str, default="model_ckpts", help="model_out_dir")
+    parser.add_argument("--model_out_dir", type=str, default="checkpoints", help="model_out_dir")
     parser.add_argument("--max_save", type=int, default=3, help="max save checkpoints")
     parser.add_argument("--device", type=str, default="cuda", help="device")
     
@@ -43,6 +43,11 @@ def parse_args():
     # grpo
     parser.add_argument("--group_num", type=int, default=8, help="group_num")
     parser.add_argument("--mini_batch_size", type=int, default=1, help="mini_batch_size")
+    
+    # mtp
+    parser.add_argument("--mtp", type=bool, default=False, help="if to use mtp")
+    parser.add_argument("--num_additional_preds", type=int, default=2, help="num_additional_preds")
+    parser.add_argument("--mtp_lambda_weight", type=float, default=1.0, help="mtp_lambda_weight")
     
     # optimizer 
     parser.add_argument("--num_warmup_steps", type=int, default=0, help="learning rate warmup steps")

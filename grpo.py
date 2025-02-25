@@ -124,6 +124,9 @@ class Trainer:
         self.log_steps = args.log_steps
         self.save_steps = args.save_steps
         self.max_save = args.max_save
+        self.model_out_dir = args.model_out_dir
+        
+        # grpo
         self.group_num = args.group_num
         self.mini_batch_size = args.mini_batch_size
         
@@ -315,7 +318,7 @@ class Trainer:
         self.lr_scheduler = get_linear_schedule_with_warmup(optimizer=self.optimizer, num_warmup_steps=self.num_warmup_steps, num_training_steps=max_train_steps)
 
     def save_manager(self, current_epoch, current_steps, current_reward, max_save=None, prefix=None):
-        checkpoints_dir = f"checkpoints/{self.wandb_run_name}"
+        checkpoints_dir = f"{self.model_out_dir}/{self.wandb_run_name}"
         if not os.path.exists(checkpoints_dir):
             os.makedirs(checkpoints_dir)
         

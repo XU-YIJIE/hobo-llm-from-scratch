@@ -1,26 +1,28 @@
-# Hobo-LLM: from sft to grpo
+# Hobo-LLM: from Llama to Deepseek
 
 ![License](https://img.shields.io/badge/License-Apache%202.0-green)
 
-从0到1实现 pt/sft/grpo，适配中小型场景的多机多卡训练。保证可读性和教学性的同时，最小化第三方库依赖
-
 ## News
-[2024/02/18]  GRPO supports 8bit/4bit quantized training, supports lora/qlora
+[2025/02/24]  Qwen2 based MTP (Multi-Token Prediction) training implemented. See modeling_qwen2_mtp.py
 
-[2024/02/17]  Implemented trainable tokenizer 
+[2025/02/18]  GRPO supports 8bit/4bit quantized training, supports lora/qlora
 
-[2024/02/16]  GRPO refactored, adopting the same code paradigm as sft_accelerator.py
+[2025/02/17]  Implemented trainable tokenizer 
 
-[2024/02/15]  GRPO [如何0样本基于grpo训练一个夸夸机器人，单卡24GB显存耗时15分钟](https://github.com/XU-YIJIE/grpo-flat)
+[2025/02/16]  GRPO refactored, adopting the same code paradigm as sft_accelerator.py
 
-[2024/02/13]  Implemented GRPO training based on [tl;dr](https://huggingface.co/datasets/trl-lib/tldr) dataset, supporting summary length adjustment via length_reward
+[2025/02/15]  GRPO [如何0样本基于grpo训练一个夸夸机器人，单卡24GB显存耗时15分钟](https://github.com/XU-YIJIE/grpo-flat)
+
+[2025/02/13]  Implemented GRPO training based on [tl;dr](https://huggingface.co/datasets/trl-lib/tldr) dataset, supporting summary length adjustment via length_reward
 
 ## Features
 
-### 1. Llama2-like Architecture Model Implemented from Scratch
+### 1. Llama2-like Architecture Model Implemented from Scratch (switching to Deepseek structure ...)
 Model structure details in modeling_hobo.py
 
 Implements essential features with simplified code logic for better readability
+- MTP (Multi-Token Prediction) implemented
+- Trainable tokenizer
 - Supports FlashAttention-2 acceleration
 - Implements Grouped Query Attention (GQA)
 - Integrates DeepSpeed distributed training
@@ -44,18 +46,18 @@ lm_config = MyConfig(
 ```
 Uses qwen2.5's tokenizer and vocab.json
 
-### 2. Multi-node Multi-GPU Training Support with DeepSpeed
-    
-- Configure LAN IP nodes in the hostfile to enable multi-node multi-GPU training based on deepspeed
-
-- 2D parallelism (dp + pp) implementation based on deepspeed.pipe. PipelineModule is under development...
-
-### 3. GRPO Implementation
+### 2. GRPO Implementation from scratch
 
 Controllable text generation training based on GRPO (Grouped Reward Policy Optimization):
 
 - Summary length control: Using TLDR dataset to train models to generate summaries of specified length
 - Zero-shot transfer training: [如何0样本基于grpo训练一个夸夸机器人，单卡24GB显存耗时15分钟](https://github.com/XU-YIJIE/grpo-flat)
+
+### 3. Multi-node Multi-GPU 2D parallelism (dp + pp) Training Support with DeepSpeed
+    
+- Configure LAN IP nodes in the hostfile to enable multi-node multi-GPU training based on deepspeed
+
+- 2D parallelism (dp + pp) implementation based on deepspeed.pipe. (PipelineModule is under development...)
 
 
 ## Project Structure
@@ -111,6 +113,26 @@ or
 
 conda create -n hobo-llm python=3.10
 pip install -r requirements.txt
+```
+
+### SFT
+```bash
+python sft_accelerator.py \
+    --from_scratch True \  # use custom model and training from scratch
+    --tokenizer_name_or_path "lm_models/Qwen2.5-0.5B-Instruct" \
+    --dataset_dir "dataset/sharegpt_gpt4" \
+    --dataset_name "sharegpt_gpt4" \
+    --batch_size 6 \
+    --gradient_accumulation_steps 8 \
+    --learning_rate 1e-6 \
+    --num_epochs 1 \
+    --max_grad_norm 1.0 \
+    --use_fp8 False \
+    --device "cuda" \
+    --seed 1024
+
+# accelerate deepspeed training
+bash scripts/train_accelerate_sft.sh
 ```
 
 ### GRPO
@@ -181,29 +203,8 @@ accelerate launch grpo.py \
     --target_modules "q_proj,v_proj,lm_head"
 ```
 
-### SFT
-
-```bash
-python sft_accelerator.py \
-    --from_scratch True \  # use custom model and training from scratch
-    --tokenizer_name_or_path "lm_models/Qwen2.5-0.5B-Instruct" \
-    --dataset_dir "dataset/sharegpt_gpt4" \
-    --dataset_name "sharegpt_gpt4" \
-    --batch_size 6 \
-    --gradient_accumulation_steps 8 \
-    --learning_rate 1e-6 \
-    --num_epochs 1 \
-    --max_grad_norm 1.0 \
-    --use_fp8 False \
-    --device "cuda" \
-    --seed 1024
-
-# accelerate deepspeed training
-bash scripts/train_accelerate_sft.sh
-```
-
 ## TODO
-- [ ] Implement MOE/MLA
+- [ ] Implement DeepSeek-style MOE (Mixture of Experts) architecture
 - [ ] Implement training with deepspeed pipemodule paradigm to achieve 2D parallelism (pp + dp)
 - [ ] Train a 0.5B chat model from scratch
 - [ ] Add model evaluation code to generate batch performance reports

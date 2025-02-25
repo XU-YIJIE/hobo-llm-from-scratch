@@ -22,6 +22,8 @@ class MyConfig(PretrainedConfig):
         # sliding_window=4096,
         # max_window_layers=28,
         attention_dropout=0.0,
+        num_additional_preds=2,
+        mtp_lambda_weight=1.0,
         **kwargs,):
         
         super().__init__(**kwargs)
@@ -44,3 +46,5 @@ class MyConfig(PretrainedConfig):
         # self.sliding_window = sliding_window
         # self.max_window_layers = max_window_layers
         self.attention_dropout = attention_dropout
+        self.num_additional_preds = num_additional_preds
+        self.mtp_lambda_weight = mtp_lambda_weight

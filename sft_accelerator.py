@@ -4,6 +4,7 @@ from transformers import (PreTrainedTokenizer,
                           AutoTokenizer, 
                           DataCollatorForSeq2Seq, 
                           AutoModelForCausalLM, 
+                          AutoConfig,
                           set_seed,
                           get_linear_schedule_with_warmup,
                           get_scheduler,
@@ -37,6 +38,7 @@ from data.parser import DatasetAttr
 from constants import IGNORE_INDEX
 from configuration_model import MyConfig
 from modeling_hobo import HoboGPTModelForCausalLM
+from modeling_qwen2_mtp import Qwen2MTPForCausalLM
 from arguments import parse_args
 
 
@@ -50,9 +52,9 @@ logger.add(
     filter=lambda record: record["level"].name in ["INFO", "ERROR"]
 )
 
-# os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
-# os.environ["NCCL_P2P_DISABLE"] = "1"
-# os.environ["NCCL_IB_DISABLE"] = "1"  # Using RTX 4000 series doesn't support faster communication broadband via P2P or IB
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+os.environ["NCCL_P2P_DISABLE"] = "1"
+os.environ["NCCL_IB_DISABLE"] = "1"  # Using RTX 4000 series doesn't support faster communication broadband via P2P or IB
 
 
 def find_all_linear_names(peft_model, int4=False, int8=False):
@@ -107,6 +109,7 @@ class Trainer:
         self.save_steps = args.save_steps
         self.eval_steps = args.eval_steps
         self.max_save = args.max_save
+        self.model_out_dir = args.model_out_dir
         
         # peft
         self.use_peft = args.use_peft
@@ -116,6 +119,11 @@ class Trainer:
         self.modules_to_save = args.modules_to_save
         self.target_modules = args.target_modules
         self.qlora = args.qlora  # only compatible with 4bit
+        
+        # mtp
+        self.mtp = args.mtp
+        self.num_additional_preds = args.num_additional_preds
+        self.mtp_lambda_weight = args.mtp_lambda_weight
         
         seed = args.seed
         set_seed(seed)
@@ -217,7 +225,12 @@ class Trainer:
             }
             if quantization_config:
                 kwargs["quantization_config"] = quantization_config
-            self.model = AutoModelForCausalLM.from_pretrained(**kwargs)
+            if self.mtp:
+                config = AutoConfig.from_pretrained(**kwargs)
+                config.update({"num_additional_preds": self.num_additional_preds, "mtp_lambda_weight": self.mtp_lambda_weight})
+                self.model = Qwen2MTPForCausalLM(config=config)
+            else:
+                self.model = AutoModelForCausalLM.from_pretrained(**kwargs)
         
         if self.use_peft:
             target_modules = self.target_modules.split(',') if self.target_modules else None
@@ -430,7 +443,7 @@ class Trainer:
                     
                 # evaluate
                 if self.accelerator.is_main_process and total_steps % self.eval_steps == 0:
-                    self.evaluate(checkpoint_dir=f"checkpoints/{self.wandb_run_name}", step_num=total_steps, data_args=self.data_args, from_scratch=self.from_scratch)
+                    self.evaluate(checkpoint_dir=f"{self.model_out_dir}/{self.wandb_run_name}", step_num=total_steps, data_args=self.data_args, from_scratch=self.from_scratch)
                     
                 # clear memory every 100 steps
                 if step % 100 == 0:
@@ -592,7 +605,7 @@ class Trainer:
             gc.collect()
 
     def save_manager(self, current_epoch, current_steps, current_loss, max_save=None, prefix=None):
-        checkpoints_dir = f"checkpoints/{self.wandb_run_name}"
+        checkpoints_dir = f"{self.model_out_dir}/{self.wandb_run_name}"
         if not os.path.exists(checkpoints_dir):
             os.makedirs(checkpoints_dir)
         
@@ -631,14 +644,14 @@ if __name__ == "__main__":
     # args.dataset_name = "sharegpt_gpt4"
     # args.input_jsonl = "sharegpt_gpt4.jsonl"
     
-    # args.from_scratch = True
-    # args.use_peft = True
-    # args.target_modules = "q_proj,v_proj,lm_head"
-    # args.use_4bit = True
+    # args.from_scratch = False
+    # args.use_peft = False
+    # # args.target_modules = "q_proj,v_proj,lm_head"
+    # # args.use_4bit = True
     # # args.use_8bit = True
     # args.modules_to_save = None
-    # args.qlora = True
-    # args.batch_size = 10
+    # # args.qlora = True
+    # args.batch_size = 2
     # data_args = DataArguments(template=args.template, 
     #                           cutoff_len=args.cutoff_len, 
     #                           train_on_prompt=False, 
