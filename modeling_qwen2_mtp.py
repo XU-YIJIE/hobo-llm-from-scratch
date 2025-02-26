@@ -73,9 +73,21 @@ class Qwen2MTPForCausalLM(Qwen2PreTrainedModel):
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         self.mtp = MTP(config)
-
+        self._copy_tfblock_weights_to_mtp()
         # Initialize weights and apply final processing
         self.post_init()
+        
+    def _copy_tfblock_weights_to_mtp(self):
+        source_layers = self.model.layers[-self.config.num_additional_preds:]
+        for i, mtp_sub in enumerate(self.mtp.mtps):
+            source_layer = source_layers[i]
+            target_layer = mtp_sub.transformer
+            with torch.no_grad():
+                for target_name, target_param in target_layer.named_parameters():
+                    for source_name, source_param in source_layer.named_parameters():
+                        if target_name == source_name:
+                            target_param.data.copy_(source_param.data)
+                            break
         
     def forward(self, input_ids, labels=None, inputs_embeds=None, position_ids=None, num_logits_to_keep=0, past_key_values=None, use_cache=False, cache_position=None, return_dict=False, **kwargs):
         outputs = self.model(
@@ -118,7 +130,6 @@ class Qwen2MTPForCausalLM(Qwen2PreTrainedModel):
                 # Flatten the tokens
                 mtp_logits = mtp_logits.view(-1, self.config.vocab_size)
                 mtp_labels = mtp_labels.view(-1)
-                # Enable model parallelism
                 mtp_labels = mtp_labels.to(mtp_logits.device)
                 mtp_loss += fixed_cross_entropy(mtp_logits, mtp_labels)
                 
@@ -131,7 +142,6 @@ class Qwen2MTPForCausalLM(Qwen2PreTrainedModel):
             # Flatten the tokens
             shift_logits = shift_logits.view(-1, self.config.vocab_size)
             shift_labels = shift_labels.view(-1)
-            # Enable model parallelism
             shift_labels = shift_labels.to(shift_logits.device)
             loss = fixed_cross_entropy(shift_logits, shift_labels) + mtp_loss
         
