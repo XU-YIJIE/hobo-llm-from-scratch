@@ -640,28 +640,28 @@ class Trainer:
 
 if __name__ == "__main__":
     args = parse_args()
-    args.preprocessing_num_workers = 1
-    args.dataset_dir = "dataset/sharegpt_gpt4"
-    args.dataset_name = "sharegpt_gpt4"
-    args.input_jsonl = "sharegpt_gpt4.jsonl"
+    # args.preprocessing_num_workers = 1
+    # args.dataset_dir = "dataset/sharegpt_gpt4"
+    # args.dataset_name = "sharegpt_gpt4"
+    # args.input_jsonl = "sharegpt_gpt4.jsonl"
     
-    args.from_scratch = False
-    args.use_peft = False
-    # args.target_modules = "q_proj,v_proj,lm_head"
-    # args.use_4bit = True
-    # args.use_8bit = True
-    # args.modules_to_save = None
-    # args.qlora = True
-    # args.save_steps = 100
-    args.batch_size = 2
-    args.mtp = True
-    args.num_additional_preds = 1
-    args.mtp_lambda_weight = 1.0
-    data_args = DataArguments(template=args.template, 
-                              cutoff_len=args.cutoff_len, 
-                              train_on_prompt=False, 
-                              mask_history=False, 
-                              preprocessing_num_workers=8)
+    # args.from_scratch = False
+    # args.use_peft = False
+    # # args.target_modules = "q_proj,v_proj,lm_head"
+    # # args.use_4bit = True
+    # # args.use_8bit = True
+    # # args.modules_to_save = None
+    # # args.qlora = True
+    # # args.save_steps = 100
+    # args.batch_size = 2
+    # args.mtp = True
+    # args.num_additional_preds = 1
+    # args.mtp_lambda_weight = 1.0
+    # data_args = DataArguments(template=args.template, 
+    #                           cutoff_len=args.cutoff_len, 
+    #                           train_on_prompt=False, 
+    #                           mask_history=False, 
+    #                           preprocessing_num_workers=8)
     trainer = Trainer(args)
     trainer.train()
     # trainer.evaluate(checkpoint_dir=f"checkpoints/sft_training_20250203_163642", step_num=100, data_args=data_args, from_scratch=True)
