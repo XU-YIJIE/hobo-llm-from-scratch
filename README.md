@@ -118,7 +118,7 @@ pip install -r requirements.txt
 ### SFT
 ```bash
 python sft_accelerator.py \
-    --from_scratch True \  # use custom model and training from scratch
+    --from_scratch False \
     --tokenizer_name_or_path "lm_models/Qwen2.5-0.5B-Instruct" \
     --dataset_dir "dataset/sharegpt_gpt4" \
     --dataset_name "sharegpt_gpt4" \
@@ -132,7 +132,12 @@ python sft_accelerator.py \
     --seed 1024
 
 # accelerate deepspeed training
-bash scripts/train_accelerate_sft.sh
+sh scripts/train_accelerate_sft.sh
+```
+
+## SFT with DeepSpeed 2D Parallelism
+```bash
+sh scripts/run_train_ds_pp.sh
 ```
 
 ### GRPO

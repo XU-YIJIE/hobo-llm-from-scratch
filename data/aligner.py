@@ -178,7 +178,7 @@ def convert_sharegpt(
     if (not dataset_attr.ranking and len(aligned_messages) % 2 != 0) or (
         dataset_attr.ranking and len(aligned_messages) % 2 == 0
     ):
-        logger.warning(f"Invalid message count in {messages}.")
+        # logger.warning(f"Invalid message count in {messages}.")
         broken_data = True
 
     if dataset_attr.kto_tag and isinstance(example[dataset_attr.kto_tag], bool):  # kto example

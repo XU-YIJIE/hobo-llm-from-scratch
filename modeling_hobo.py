@@ -93,7 +93,7 @@ class RotaryEmbedding(nn.Module):
             self.max_seq_len_cached = self.original_max_seq_len
     
     @torch.no_grad()
-    def forward(self, hidden_state, position_ids, seq_len):
+    def forward(self, hidden_state, position_ids):
         '''
         position_ids: (1, seq_len)
         '''

@@ -52,4 +52,4 @@
         "num_workers": 2,
         "pin_memory": false
     }
-} 
+}

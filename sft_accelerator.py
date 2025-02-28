@@ -653,10 +653,10 @@ if __name__ == "__main__":
     # # args.modules_to_save = None
     # # args.qlora = True
     # # args.save_steps = 100
-    # args.batch_size = 2
-    # args.mtp = True
-    # args.num_additional_preds = 1
-    # args.mtp_lambda_weight = 1.0
+    # args.batch_size = 1
+    # # args.mtp = True
+    # # args.num_additional_preds = 1
+    # # args.mtp_lambda_weight = 1.0
     # data_args = DataArguments(template=args.template, 
     #                           cutoff_len=args.cutoff_len, 
     #                           train_on_prompt=False, 

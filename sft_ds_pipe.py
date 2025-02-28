@@ -15,6 +15,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 from transformers import AutoTokenizer
 from transformers.tokenization_utils_base import PaddingStrategy, PreTrainedTokenizerBase
 from transformers.data.data_collator import pad_without_fast_tokenizer_warning
+from loguru import logger
 
 from constants import IGNORE_INDEX
 from data.aligner import align_dataset
@@ -55,7 +56,6 @@ class DataCollatorForSeq2Seq:
             return_tensors=return_tensors,
         )
 
-        # 手动处理标签填充
         if labels is not None:
             if not self.padding:
                 if isinstance(features[0][label_name], list):
@@ -63,9 +63,7 @@ class DataCollatorForSeq2Seq:
                 else:
                     batch["labels"] = [np.concatenate([label, []]) for label in labels]
             else:
-                max_label_length = max(len(l) for l in labels)
-                if self.max_length is not None:
-                    max_label_length = min(max_label_length, self.max_length)
+                max_label_length = self.max_length if self.max_length is not None else max(len(l) for l in labels)
                 if self.pad_to_multiple_of is not None:
                     max_label_length = (
                         (max_label_length + self.pad_to_multiple_of - 1)
@@ -104,60 +102,68 @@ class DataCollatorForSeq2Seq:
         else:
             batch["labels"] = None
 
-        # 确保input_ids不超过词表大小
-        vocab_size = len(self.tokenizer)
-        input_ids = batch["input_ids"].clamp_(0, vocab_size - 1)
-        if batch["labels"] is not None:
-            batch["labels"].clamp_(min=-100, max=vocab_size - 1)
-
-        # 生成position_ids
-        position_ids = torch.arange(0, input_ids.size(1), dtype=torch.long).unsqueeze(0).expand_as(input_ids)
+        input_ids = batch["input_ids"]
+        device = input_ids.device
+        attention_mask = batch["attention_mask"].to(device)
         
-        return (input_ids, batch["attention_mask"], position_ids, batch["labels"]), None
+        position_ids = torch.arange(0, input_ids.size(1), dtype=torch.long, device=device).unsqueeze(0).expand_as(input_ids)
+        
+        if batch["labels"] is not None:
+            labels = batch["labels"].to(device)
+        else:
+            labels = None
+
+        return (input_ids, attention_mask, position_ids, labels), None
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
     
-    # 模型参数
+    # model
     parser.add_argument("--model_name_or_path", type=str, default="lm_models/Qwen2.5-0.5B-Instruct", required=True)
-    parser.add_argument("--max_seq_len", type=int, default=2048)
     parser.add_argument("--output_dir", type=str, default="output")
+    parser.add_argument("--num_epochs", type=int, default=3)
+    parser.add_argument("--per_device_train_batch_size", type=int, default=1)
+    parser.add_argument("--max_seq_len", type=int, default=2048)
+    
+    # dataset
     parser.add_argument("--dataset_dir", type=str, default="dataset/sharegpt_gpt4")
     parser.add_argument("--input_jsonl", type=str, default="sharegpt_gpt4.jsonl")
     parser.add_argument("--dataset_name", type=str, default="sharegpt_gpt4")
-    parser.add_argument("--template", type=str, default="qwen")
     parser.add_argument("--cutoff_len", type=int, default=2048)
+    parser.add_argument("--template", type=str, default="qwen")
     parser.add_argument("--preprocessing_num_workers", type=int, default=4)
-    parser.add_argument("--num_epochs", type=int, default=3)
-    parser.add_argument("--per_device_train_batch_size", type=int, default=1)
     
-    # 训练参数
+    # training
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--learning_rate", type=float, default=1e-5)
     parser.add_argument("--weight_decay", type=float, default=0.01)
-    parser.add_argument("--warmup_steps", type=int, default=100)
+    parser.add_argument("--warmup_steps", type=int, default=10)
     
-    # 并行参数
+    # parallel
     parser.add_argument("--local_rank", type=int, default=-1)
     parser.add_argument("--pp_size", type=int, default=2)
     parser.add_argument("--checkpoint_activations", action="store_true")
     parser.add_argument("--checkpoint_num_layers", type=int, default=1)
+    parser.add_argument("--pipe_chunk_size", type=int, default=1)
+    parser.add_argument("--steps_per_print", type=int, default=1000)
     
-    # 混合精度
+    # mixed precision
     parser.add_argument("--fp16", action="store_true")
     parser.add_argument("--bf16", action="store_true")
     
-    # DeepSpeed配置
+    # DeepSpeed config
     parser = deepspeed.add_config_arguments(parser)
     
     args = parser.parse_args()
     return args
 
+
 def create_ds_config(args):
     ds_config = {
         "train_micro_batch_size_per_gpu": args.per_device_train_batch_size,
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
+        "steps_per_print": args.steps_per_print,
         
         "optimizer": {
             "type": "AdamW",
@@ -196,20 +202,38 @@ def create_ds_config(args):
         "prescale_gradients": False,
         "wall_clock_breakdown": False,
         
+        "zero_optimization": {
+            "stage": 0,
+            "allgather_partitions": True,
+            "allgather_bucket_size": 5e8,
+            "overlap_comm": False,  # 流水线并行中设为False
+            "reduce_scatter": True,
+            "reduce_bucket_size": 5e8,
+            "contiguous_gradients": True,
+            # "offload_optimizer": {"device": "cpu", "pin_memory": True},
+        },
+        
+        "activation_checkpointing": {
+            "partition_activations": False,
+            "cpu_checkpointing": False,
+            "contiguous_memory_optimization": False,
+            "number_checkpoints": args.checkpoint_num_layers if args.checkpoint_activations else 0,
+            "synchronize_checkpoint_boundary": False,
+            "profile": False
+        },
+        
         "pipeline": {
             "enabled": True,
             "num_stages": args.pp_size,
-            "pipe_chunk_size": 2,
-            "num_micro_batches": 4,
+            "pipe_chunk_size": args.pipe_chunk_size,
+            "num_micro_batches": args.per_device_train_batch_size,
             "activation_checkpoint_interval": args.checkpoint_num_layers if args.checkpoint_activations else 0,
-            "pipe_schedule": "interleaved"
+            "pipe_schedule": "forward-backward",
+            # "pipe_schedule": "interleaved",
+            "communication_data_type": "fp16" if args.fp16 else "bf16" if args.bf16 else "fp32",
+            "timeout": 3600.0,
+            "barrier_token_comm": True
         },
-        
-        "data_efficiency": {
-            "dataloader_type": "single",
-            "num_workers": 2,
-            "pin_memory": False
-        }
     }
     
     return ds_config
@@ -226,7 +250,7 @@ def initialize_dataset_and_dataloader(args, tokenizer):
         cutoff_len=args.cutoff_len,
         train_on_prompt=False,
         mask_history=False,
-        preprocessing_num_workers=min(args.preprocessing_num_workers, 4)  # 限制工作进程数
+        preprocessing_num_workers=args.preprocessing_num_workers
     )
     
     dataset = align_dataset(
@@ -235,8 +259,6 @@ def initialize_dataset_and_dataloader(args, tokenizer):
         data_args=data_args
     )
     
-    sample_dataset = list(itertools.islice(dataset, 1))
-    
     column_names_to_remove = list(next(iter(dataset)).keys())
     
     preprocess_func = partial(preprocess_supervised_dataset, template=template, tokenizer=tokenizer, data_args=data_args)
@@ -244,13 +266,18 @@ def initialize_dataset_and_dataloader(args, tokenizer):
     
     train_sampler = DistributedSampler(
         dataset,
-        num_replicas=args.pp_size,
-        rank=args.local_rank,
-        shuffle=True,
-        drop_last=True
+        num_replicas=dist.get_world_size(),
+        rank=dist.get_rank(),
+        drop_last=True,
     )
     
-    data_collator = DataCollatorForSeq2Seq(tokenizer=tokenizer, label_pad_token_id=IGNORE_INDEX)
+    # TODO 实现sequence_packing
+    data_collator = DataCollatorForSeq2Seq(
+        tokenizer=tokenizer, 
+        label_pad_token_id=IGNORE_INDEX,
+        max_length=args.max_seq_len,  # 使用args中的max_seq_len
+        padding="max_length"  # 使用max_length填充策略
+    )
     
     train_dataloader = DataLoader(
         dataset,
@@ -258,14 +285,13 @@ def initialize_dataset_and_dataloader(args, tokenizer):
         collate_fn=data_collator,
         batch_size=args.per_device_train_batch_size,
         pin_memory=False,
-        num_workers=2,
-        prefetch_factor=2
+        num_workers=args.preprocessing_num_workers,
+        drop_last=True,
     )
     
-    total_training_steps = math.ceil(len(train_dataloader) * args.num_epochs)
-
+    total_training_steps = len(train_dataloader) * args.num_epochs // args.gradient_accumulation_steps
+    
     return train_dataloader, total_training_steps
-    # return train_dataloader
 
 
 def train(args):
@@ -273,7 +299,7 @@ def train(args):
     
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, trust_remote_code=True)
     
-    model = get_deepspeed_pipemodule(args, args.pp_size)
+    model = get_deepspeed_pipemodule(args)
     
     ds_config = create_ds_config(args)
     
@@ -282,27 +308,37 @@ def train(args):
     model_engine, _, _, _ = deepspeed.initialize(
         model=model,
         config=ds_config,
-        model_parameters=model.parameters(),
-        # training_data=train_dataloader
+        model_parameters=model.parameters()
     )
+    
+    if args.gradient_accumulation_steps != model_engine.gradient_accumulation_steps():
+        if dist.get_rank() == 0:
+            logger.warning(f"Gradient accumulation steps ({args.gradient_accumulation_steps}) does not match DeepSpeed engine's gradient accumulation steps ({model_engine.gradient_accumulation_steps()})")
+            logger.warning(f"Using DeepSpeed engine's gradient accumulation steps: {model_engine.gradient_accumulation_steps()}")
+    
+    actual_gas = model_engine.gradient_accumulation_steps()
+    
+    logger.info(f"Actual gradient accumulation steps: {actual_gas}")
+    logger.info(f"Pipeline micro batch count: {actual_gas}")
     
     for epoch in range(args.num_epochs):
         model_engine.train()
+        train_dataloader.sampler.set_epoch(epoch)
+        data_iterator = iter(train_dataloader)
+        steps_per_epoch = len(train_dataloader) // model_engine.gradient_accumulation_steps()
+        if dist.get_rank() == 0:
+            logger.info(f"Epoch {epoch}: Total steps = {steps_per_epoch}, Total micro batches = {len(train_dataloader)}")
         
-        # for step, batch in enumerate(train_dataloader)
-        train_dataloader = deepspeed.utils.RepeatingLoader(train_dataloader)
-        train_iterator = iter(train_dataloader)
-        
-        for iteration in range(total_training_steps):
-            loss = model_engine.train_batch(data_iter=train_iterator)
+        for step in range(steps_per_epoch):
+            loss = model_engine.train_batch(data_iter=data_iterator)
             
-            if dist.get_rank() == 0 and iteration % 100 == 0:
-                print(f"Epoch: {epoch}, Step: {iteration}, Loss: {loss.item():.4f}")
+            dist.barrier()
+            if dist.get_rank() == 0 and step % 10 == 0:
+                logger.info(f"Epoch: {epoch}, Step: {step}, Loss: {loss.item():.4f}")
         
         if dist.get_rank() == 0:
-            model_engine.save_checkpoint(
-                save_dir=os.path.join(args.output_dir, f"epoch_{epoch}")
-            )
+            model_engine.save_checkpoint(save_dir=os.path.join(args.output_dir, f"epoch_{epoch}"))
+        dist.barrier()
 
 
 def main():
