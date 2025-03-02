@@ -3,6 +3,8 @@
 ![License](https://img.shields.io/badge/License-Apache%202.0-green)
 
 ## News
+[2025/03/02]  2D parallelism (dp + pp) training implemented. Try `scripts/run_train_ds_pp.sh`
+
 [2025/02/24]  Qwen2 based MTP (Multi-Token Prediction) training implemented. See modeling_qwen2_mtp.py
 
 [2025/02/18]  GRPO supports 8bit/4bit quantized training, supports lora/qlora
@@ -122,12 +124,11 @@ python sft_accelerator.py \
     --tokenizer_name_or_path "lm_models/Qwen2.5-0.5B-Instruct" \
     --dataset_dir "dataset/sharegpt_gpt4" \
     --dataset_name "sharegpt_gpt4" \
-    --batch_size 6 \
+    --batch_size 2 \
     --gradient_accumulation_steps 8 \
     --learning_rate 1e-6 \
     --num_epochs 1 \
     --max_grad_norm 1.0 \
-    --use_fp8 False \
     --device "cuda" \
     --seed 1024
 
