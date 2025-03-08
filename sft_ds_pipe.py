@@ -1,3 +1,4 @@
+import datetime
 from functools import partial
 import itertools
 import math
@@ -202,16 +203,16 @@ def create_ds_config(args):
         "prescale_gradients": False,
         "wall_clock_breakdown": False,
         
-        "zero_optimization": {
-            "stage": 0,
-            "allgather_partitions": True,
-            "allgather_bucket_size": 5e8,
-            "overlap_comm": False,  # 流水线并行中设为False
-            "reduce_scatter": True,
-            "reduce_bucket_size": 5e8,
-            "contiguous_gradients": True,
-            # "offload_optimizer": {"device": "cpu", "pin_memory": True},
-        },
+        # "zero_optimization": {
+        #     "stage": 0,
+        #     "allgather_partitions": True,
+        #     "allgather_bucket_size": 5e8,
+        #     "overlap_comm": False,  # 流水线并行中设为False
+        #     "reduce_scatter": True,
+        #     "reduce_bucket_size": 5e8,
+        #     "contiguous_gradients": True,
+        #     # "offload_optimizer": {"device": "cpu", "pin_memory": True},
+        # },
         
         "activation_checkpointing": {
             "partition_activations": False,
@@ -335,9 +336,13 @@ def train(args):
             dist.barrier()
             if dist.get_rank() == 0 and step % 10 == 0:
                 logger.info(f"Epoch: {epoch}, Step: {step}, Loss: {loss.item():.4f}")
-        
+                
+        save_dir = os.path.join(args.output_dir, f"epoch_{epoch}")
         if dist.get_rank() == 0:
-            model_engine.save_checkpoint(save_dir=os.path.join(args.output_dir, f"epoch_{epoch}"))
+            logger.info(f"Saving checkpoint for epoch {epoch} to {save_dir}")
+        
+        model_engine.save_checkpoint(save_dir=save_dir, tag=None, save_latest=False)
+
         dist.barrier()
 
 

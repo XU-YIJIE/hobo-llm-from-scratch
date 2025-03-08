@@ -22,11 +22,11 @@ deepspeed \
     --pp_size $PP_SIZE \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 10 \
-    --num_epochs 1 \
+    --num_epochs 3 \
     --learning_rate 1e-5 \
-    --max_seq_len 1024 \
-    --cutoff_len 1024 \
+    --max_seq_len 100 \
+    --cutoff_len 100 \
     --fp16 \
     --checkpoint_activations \
-    --checkpoint_num_layers 1 \
+    --checkpoint_num_layers 4 \
     --steps_per_print 1 \
