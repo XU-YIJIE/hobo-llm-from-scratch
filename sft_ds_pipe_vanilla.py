@@ -316,7 +316,7 @@ def train(args):
     
     steps_per_epoch = len(train_dataloader) // model_engine.gradient_accumulation_steps()  # 优化器步数
     if dist.get_rank() == 0:
-        logger.info(f"Total training steps = {steps_per_epoch}, Total micro batch count = {len(train_dataloader)}")
+        logger.info(f"Total training steps = {steps_per_epoch}")
     
     for epoch in range(1, args.num_epochs + 1):
         model_engine.train()

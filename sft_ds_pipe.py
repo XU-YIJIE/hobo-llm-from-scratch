@@ -26,8 +26,8 @@ from data.data_args import DataArguments
 from data.parser import DatasetAttr
 from data.preprocess import preprocess_supervised_dataset
 from data.template import get_template_and_fix_tokenizer
-# from pipemodule_qwen2 import get_deepspeed_pipemodule
 from pipemodule_qwen2 import get_deepspeed_pipemodule
+# from pipemodule_qwen2 import set_global_pipeline_engine
 
 
 @dataclass
@@ -162,6 +162,7 @@ def parse_args():
     parser.add_argument("--log_steps", type=int, default=10, help="log every n steps")
     parser.add_argument("--save_steps", type=int, default=1000, help="save every n steps")
     parser.add_argument("--eval_steps", type=int, default=1000, help="save every n steps")
+    parser.add_argument("--max_save", type=int, default=3, help="max save checkpoints")
     
     # DeepSpeed config
     parser = deepspeed.add_config_arguments(parser)
@@ -215,6 +216,7 @@ class Trainer:
         self.log_steps = args.log_steps
         self.save_steps = args.save_steps
         self.eval_steps = args.eval_steps
+        self.max_save = args.max_save
         
         # wandb
         self.wandb_project = args.wandb_project
@@ -239,6 +241,7 @@ class Trainer:
             config=self.ds_config,
             model_parameters=self.model.parameters()
         )
+        # set_global_pipeline_engine(self.model_engine)
         
         if self.gradient_accumulation_steps != self.model_engine.gradient_accumulation_steps():
             if self.global_rank == 0:
@@ -321,9 +324,10 @@ class Trainer:
                 "enabled": True,
                 "num_stages": self.pp_size,
                 "pipe_chunk_size": self.pipe_chunk_size,
-                "num_micro_batches": self.per_device_train_batch_size,
+                "num_micro_batches": self.per_device_train_batch_size,  # 想减少pp bubble时使用，每次优化器更新处理的样本总数为 per_device_batch_size * num_micro_batches * gradient_accumulation_steps
                 "activation_checkpoint_interval": self.checkpoint_num_layers if self.checkpoint_activations else 0,
-                "pipe_schedule": "forward-backward",
+                "pipe_schedule": "1f1b",
+                # "pipe_schedule": "forward-backward",
                 # "pipe_schedule": "interleaved",
                 "communication_data_type": "fp16" if self.fp16 else "bf16" if self.bf16 else "fp32",
                 "timeout": 3600.0,
@@ -336,7 +340,6 @@ class Trainer:
 
     def initialize_dataset_and_dataloader(self):
         dataset = load_dataset(path=self.dataset_dir, data_files=self.input_jsonl, split="train")
-        dataset = dataset.select(range(100))
         data_args = DataArguments(template=self.template, 
                                   cutoff_len=self.cutoff_len, train_on_prompt=False, 
                                   mask_history=False, preprocessing_num_workers=self.preprocessing_num_workers)
@@ -387,7 +390,7 @@ class Trainer:
     def train(self):
         steps_per_epoch = len(self.train_dataloader) // self.model_engine.gradient_accumulation_steps()  # 优化器步数
         if self.global_rank == 0:
-            logger.info(f"Total training steps = {steps_per_epoch}, Total micro batch count = {len(self.train_dataloader)}")
+            logger.info(f"Total training steps = {steps_per_epoch}")
             
         total_steps = 0
         for epoch in range(1, self.num_epochs + 1):
@@ -402,7 +405,7 @@ class Trainer:
                     logger.info(f"Epoch: {epoch}, Step: {step}, Loss: {loss.item():.4f}")
                 total_steps += 1
                     
-            self.save_manager(current_epoch=epoch, current_steps=total_steps, current_loss=loss.item(), max_save=2, prefix=f"epoch")
+            self.save_manager(current_epoch=epoch, current_steps=total_steps, current_loss=loss.item(), max_save=self.max_save, prefix=f"epoch")
             dist.barrier()
 
     def save_manager(self, current_epoch, current_steps, current_loss, max_save=None, prefix=None):
