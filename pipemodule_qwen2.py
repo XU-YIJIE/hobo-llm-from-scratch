@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from torch import einsum
 from torch.nn import CrossEntropyLoss
 import torch.distributed as dist
 import deepspeed
@@ -7,13 +8,10 @@ from deepspeed.pipe import PipelineModule, LayerSpec, TiedLayerSpec
 from deepspeed.runtime.pipe.topology import PipeModelDataParallelTopology
 from transformers import Qwen2ForCausalLM, AutoConfig
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
-import os
-import deepspeed.comm as dist
-from torch import einsum, nn
 import importlib.util
-from functools import partial
 import einops
 
+from constants import IGNORE_INDEX
 
 def get_deepspeed_pipemodule(args):
     if not dist.is_initialized():
@@ -109,7 +107,7 @@ class EmbeddingPipeLayer(nn.Module):
         input_ids = input_ids.to(device=device, dtype=torch.long).clamp(0, vocab_size - 1)
         position_ids = position_ids.to(device=device, dtype=torch.long)
         if labels is not None:
-            labels = labels.to(device=device, dtype=torch.long).clamp(min=-100, max=vocab_size - 1)
+            labels = labels.to(device=device, dtype=torch.long).clamp(min=IGNORE_INDEX, max=vocab_size - 1)
         
         hidden_states = self.embed_tokens(input_ids)
         
