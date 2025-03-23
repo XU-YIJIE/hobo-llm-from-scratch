@@ -72,26 +72,23 @@ class QwenPipelineModel(Qwen2ForCausalLM):
         layers = []
         embed_tokens = self.model.embed_tokens
         lm_head = self.lm_head
-        is_tied = hasattr(self, "_tied_weights_keys") and "lm_head.weight" in self._tied_weights_keys
         
-        if is_tied or torch.equal(embed_tokens.weight, lm_head.weight):
-            layers.append(TiedLayerSpec("embed", EmbeddingPipeLayer, embed_tokens, self.config, tied_weight_attr="weight"))
-            
-            for decoder_layer in self.model.layers:
-                layers.append(LayerSpec(TransformerPipeLayer, decoder_layer))
+        # is_tied = hasattr(self, "_tied_weights_keys") and "lm_head.weight" in self._tied_weights_keys
+        # if is_tied or torch.equal(embed_tokens.weight, lm_head.weight):
+        #     layers.append(TiedLayerSpec("embed", EmbeddingPipeLayer, embed_tokens, self.config, tied_weight_attr="weight"))
+        #     for decoder_layer in self.model.layers:
+        #         layers.append(LayerSpec(TransformerPipeLayer, decoder_layer))
                 
-            layers.append(LayerSpec(NormPipeLayer, self.model.norm))
-            layers.append(TiedLayerSpec("head", LMHeadPipeLayer, lm_head, tied_weight_attr="weight"))
+        #     layers.append(LayerSpec(NormPipeLayer, self.model.norm))
+        #     layers.append(TiedLayerSpec("head", LMHeadPipeLayer, lm_head, tied_weight_attr="weight"))
+        # else:
+        
+        layers.append(LayerSpec(EmbeddingPipeLayer, embed_tokens, self.config))
+        for decoder_layer in self.model.layers:
+            layers.append(LayerSpec(TransformerPipeLayer, decoder_layer))
             
-        else:
-            layers.append(LayerSpec(EmbeddingPipeLayer, embed_tokens, self.config))
-            
-            for decoder_layer in self.model.layers:
-                layers.append(LayerSpec(TransformerPipeLayer, decoder_layer))
-                
-            layers.append(LayerSpec(NormPipeLayer, self.model.norm))
-            
-            layers.append(LayerSpec(LMHeadPipeLayer, lm_head))
+        layers.append(LayerSpec(NormPipeLayer, self.model.norm))
+        layers.append(LayerSpec(LMHeadPipeLayer, lm_head))
         
         return layers
 
@@ -100,7 +97,7 @@ class EmbeddingPipeLayer(nn.Module):
     def __init__(self, embed_tokens, config):
         super().__init__()
         self.embed_tokens = embed_tokens
-        self.weight = self.embed_tokens.weight
+        # self.weight = self.embed_tokens.weight
         self.config = config
     
     def forward(self, inputs):
@@ -199,7 +196,7 @@ class LMHeadPipeLayer(nn.Module):
     def __init__(self, lm_head):
         super().__init__()
         self.lm_head = lm_head
-        self.weight = self.lm_head.weight
+        # self.weight = self.lm_head.weight
         self.loss_fct = CrossEntropyLoss()
     
     def forward(self, inputs):
@@ -228,7 +225,7 @@ class RotaryEmbedding(nn.Module):
     def __init__(self, dim, theta=10000):
         super().__init__()
         inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
-        self.register_buffer('inv_freq', inv_freq)
+        self.register_buffer('inv_freq', inv_freq, persistent=False)
         self.theta = theta
         if importlib.util.find_spec('einops') is None:
             raise RuntimeError("einops is required for Rotary Embedding")

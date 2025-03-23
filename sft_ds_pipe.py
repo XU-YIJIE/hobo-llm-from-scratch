@@ -160,8 +160,8 @@ def parse_args():
     parser.add_argument("--wandb_run_name", type=str, default=None, help="wandb run name")
     parser.add_argument("--wandb_dir", type=str, default=None, help="wandb local dir, default is ./wandb/")
     parser.add_argument("--log_steps", type=int, default=10, help="log every n steps")
-    parser.add_argument("--save_steps", type=int, default=1000, help="save every n steps")
-    parser.add_argument("--eval_steps", type=int, default=1000, help="save every n steps")
+    parser.add_argument("--save_steps", type=int, default=100, help="save every n steps")
+    # parser.add_argument("--eval_steps", type=int, default=1000, help="eval every n steps")
     parser.add_argument("--max_save", type=int, default=3, help="max save checkpoints")
     
     # DeepSpeed config
@@ -215,7 +215,7 @@ class Trainer:
         # logging
         self.log_steps = args.log_steps
         self.save_steps = args.save_steps
-        self.eval_steps = args.eval_steps
+        # self.eval_steps = args.eval_steps
         self.max_save = args.max_save
         
         # wandb
@@ -398,12 +398,15 @@ class Trainer:
             self.train_dataloader.sampler.set_epoch(epoch)
             data_iterator = iter(self.train_dataloader)
             
-            for step in range(1, steps_per_epoch + 1):
+            for _ in range(1, steps_per_epoch + 1):
+                total_steps += 1
                 loss = self.model_engine.train_batch(data_iter=data_iterator)
                 dist.barrier()
-                if self.global_rank == 0 and step % 10 == 0:
-                    logger.info(f"Epoch: {epoch}, Step: {step}, Loss: {loss.item():.4f}")
-                total_steps += 1
+                if self.global_rank == 0 and total_steps % self.log_steps == 0:
+                    logger.info(f"Epoch: {epoch}, Step: {total_steps}, Loss: {loss.item():.4f}")
+                
+                if total_steps % self.save_steps == 0:
+                    self.save_manager(current_epoch=epoch, current_steps=total_steps, current_loss=loss.item(), max_save=self.max_save, prefix="step")
                     
             self.save_manager(current_epoch=epoch, current_steps=total_steps, current_loss=loss.item(), max_save=self.max_save, prefix=f"epoch")
             dist.barrier()

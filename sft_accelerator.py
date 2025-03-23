@@ -650,6 +650,7 @@ if __name__ == "__main__":
     # # args.target_modules = "q_proj,v_proj,lm_head"
     # # args.use_4bit = True
     # # args.use_8bit = True
+    # args.torch_dtype = "float16"
     # # args.modules_to_save = None
     # # args.qlora = True
     # # args.save_steps = 100
