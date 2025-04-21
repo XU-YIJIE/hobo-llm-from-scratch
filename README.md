@@ -211,7 +211,6 @@ accelerate launch grpo.py \
 
 ## TODO
 - [ ] Implement DeepSeek-style MOE (Mixture of Experts) architecture and generation based on MTP
-- [ ] Implement training with deepspeed pipemodule paradigm to achieve 2D parallelism (pp + dp)
 - [ ] Train a 0.5B chat model from scratch
 - [ ] Add model evaluation code to generate batch performance reports
 
@@ -230,6 +229,6 @@ accelerate launch grpo.py \
     author = {XU-YIJIE},
     year = {2025},
     publisher = {GitHub},
-    url = {https://github.com/XU-YIJIE/hobo-llm}
+    url = {https://github.com/XU-YIJIE/hobo-llm-from-scratch}
 }
 ```
